@@ -3,400 +3,680 @@ import { manager } from "../core/manager.js";
 import { HelperUtils } from "../utils/helpers.js";
 
 const configFile = new JsonConfigFile("./plugins/ResinClumps/config/config.json");
-const displayInterval = configFile.get("displayInterval", 50);
 const displayRadius = configFile.get("displayRadius", 70);
 const particleLifetime = configFile.get("particleLifetime", 1550);
 const blacklist = configFile.get('BlackList', []);
 configFile.close();
 
-let ps; // 延迟初始化
+class RenderMgr {
+    constructor() {
+        this.renders = new Map(); // structName -> { mode, layerIndex, particles: [], grids: {} }
+        this.interrupt = false;
+        this.ps = new ParticleSpawner(displayRadius, false, false);
+    }
 
-class Particle{
-  static drawCuboid(pos, color) {
-    if (!ps) return; // 防止未初始化调用
-    ps.spawnParticle(pos, `${color}_x0`);
-    ps.spawnParticle(pos, `${color}_x1`);
-    ps.spawnParticle(pos, `${color}_y0`);
-    ps.spawnParticle(pos, `${color}_y1`);
-    ps.spawnParticle(pos, `${color}_z0`);
-    ps.spawnParticle(pos, `${color}_z1`);
-  }
-}
+    init() {
+        Event.listen(Events.RENDER_SET_RENDER_MODE, this.setMode.bind(this));
+        Event.listen(Events.RENDER_SET_LAYER_INDEX, this.setLayerIndex.bind(this));
+        Event.listen(Events.RENDER_UPDATE_DATA, this.saveData.bind(this));
+        Event.listen(Events.MANAGER_REMOVE_STRUCTURE, this.syncStructures.bind(this));
+        Event.listen(Events.MANAGER_ADD_STRUCTURE, this.syncStructures.bind(this));
+        Event.listen(Events.RENDER_GET_MATERIALS, this.getMaterials.bind(this));
+        Event.listen(Events.RENDER_STOP_ALL_RENDERING, () => { this.interrupt = true; });
+        Event.listen(Events.RENDER_REFRESH_GRIDS, this.refresh.bind(this));
 
-class BlockState {
-  static Lost       = 'Particle_Blue';
-  static WrongType  = 'Particle_Red';
-  static WrongState = 'Particle_Yellow';
-  static Extra      = 'Particle_Pink';
+        this.syncStructures();
+
+        const database = new JsonConfigFile("./plugins/ResinClumps/config/database.json");
+        const structures = database.get('structures', {});
+        database.close();
+
+        for (const [name, item] of Object.entries(structures)) {
+            if (!this.renders.has(name)) continue;
+            const renderData = this.renders.get(name);
+            const size = manager.getSize(name);
+            if (!size) continue;
+            
+            const max = size.y - 1;
+            if (item.layerIndex < 0) {
+                renderData.mode = RenderMode.Off;
+                renderData.layerIndex = 0;
+            } else if (item.layerIndex <= max) {
+                renderData.mode = item.mode ?? RenderMode.All;
+                renderData.layerIndex = item.layerIndex ?? 0;
+            } else {
+                renderData.mode = RenderMode.Off;
+                renderData.layerIndex = max;
+            }
+        }
+
+        // Initial scan for everything
+        this.refresh();
+        this.saveData();
+
+        // Start render loop
+        this.loop();
+    }
+
+    getMode(structName) {
+        if (this.renders.has(structName)) return this.renders.get(structName).mode;
+        return RenderMode.All; // Default or undefined
+    }
+
+    getLayerIndex(structName) {
+        if (this.renders.has(structName)) return this.renders.get(structName).layerIndex;
+        return 0;
+    }
+
+    setMode(mode, structName) {
+        if (this.renders.has(structName)) {
+            this.renders.get(structName).mode = mode;
+            this.refresh(structName);
+        }
+    }
+
+    setLayerIndex(layerIndex, structName) {
+        if (this.renders.has(structName)) {
+            this.renders.get(structName).layerIndex = layerIndex;
+            this.refresh(structName);
+        }
+    }
+
+    saveData() {
+        const database = new JsonConfigFile("./plugins/ResinClumps/config/database.json", '{}');
+        const structObj = {};
+        const stored = database.get('structures', {});
+        
+        for (const [name, item] of this.renders.entries()) {
+            const old = stored[name] || {};
+            structObj[name] = {
+                filePath: old.filePath,
+                originPos: old.originPos,
+                posLocked: old.posLocked,
+                mode: item.mode !== null && item.mode !== undefined ? item.mode : RenderMode.All,
+                layerIndex: item.layerIndex !== null && item.layerIndex !== undefined ? item.layerIndex : 0,
+            };
+        }
+        database.set('structures', structObj);
+        database.close();
+    }
+
+    syncStructures() {
+        const structNames = manager.getAllStructureNames();
+        
+        // Add new
+        for (const structName of structNames) {
+            if (!this.renders.has(structName)) {
+                const originPos = manager.getOriginPos(structName);
+                const size = manager.getSize(structName);
+                const grids = {};
+                for (const color of Object.values(BlockState)) {
+                    grids[color] = new FaceGrid(originPos, size, color);
+                }
+
+                this.renders.set(structName, {
+                    mode: RenderMode.All,
+                    layerIndex: 0,
+                    particles: [],
+                    grids: grids,
+                    scanning: false
+                });
+                // New structure will need a scan, handled by refresh call usually or init
+            }
+        }
+
+        // Remove old
+        for (const structName of this.renders.keys()) {
+            if (!structNames.includes(structName)) {
+                this.renders.delete(structName);
+            }
+        }
+    }
+
+    refresh(arg1 = null, arg2 = null) {
+        if (typeof arg1 === 'string') {
+            const structName = arg1;
+            if (arg2 && typeof arg2 === 'object') {
+                // Single Block Refresh (specified structure)
+                this.scanBlock(structName, arg2);
+            } else {
+                // Structure Refresh
+                this.scanStructure(structName);
+            }
+        } else if (typeof arg1 === 'object' && arg1 !== null) {
+            // Single Block Refresh (auto-detect structure)
+            // Determine which structure(s) contain this coordinate
+            const pos = arg1;
+            for (const name of this.renders.keys()) {
+                this.scanBlock(name, pos);
+            }
+        } else {
+            // Full Workspace Refresh
+            for (const name of this.renders.keys()) {
+                this.scanStructure(name);
+            }
+        }
+    }
+
+    async scanBlock(structName, pos) {
+        const renderData = this.renders.get(structName);
+        if (!renderData || renderData.mode === RenderMode.Off) return;
+
+        const origin = manager.getOriginPos(structName);
+        const lx = Math.floor(pos.x - origin.x);
+        const ly = Math.floor(pos.y - origin.y);
+        const lz = Math.floor(pos.z - origin.z);
+        const size = manager.getSize(structName);
+
+        if (lx >= 0 && ly >= 0 && lz >= 0 && lx < size.x && ly < size.y && lz < size.z) {
+             // Check if this layer is currently being rendered
+             const mode = renderData.mode;
+             const layerIndex = renderData.layerIndex;
+             
+             if (mode === RenderMode.Off) return;
+             if (mode === RenderMode.SingleLayer && ly !== layerIndex) return;
+             if (mode === RenderMode.BelowLayer && ly > layerIndex) return;
+             if (mode === RenderMode.AboveLayer && ly < layerIndex) return;
+
+             const key = `${lx},${ly},${lz}`;
+             const { blockData } = manager.getBlockData(structName, { x: lx, y: ly, z: lz });
+             const blockPos = new IntPos(origin.x + lx, origin.y + ly, origin.z + lz, origin.dimid);
+             const localPos = { x: lx, y: ly, z: lz };
+             
+             RenderTool.renderBlock(blockPos, localPos, blockData, renderData.grids);
+             this.commitParticles(renderData);
+        }
+    }
+
+    async scanStructure(structName) {
+        const renderData = this.renders.get(structName);
+        if (!renderData || renderData.scanning) return;
+        
+        if (renderData.mode === RenderMode.Off) {
+            renderData.particles = [];
+            return;
+        }
+
+        renderData.scanning = true;
+        let hasUnloadedChunks = false;
+        
+        try {
+            // Re-create grids to clear old particles (e.g. from previous layer)
+            const originPos = manager.getOriginPos(structName);
+            const size = manager.getSize(structName);
+            const grids = {};
+            for (const color of Object.values(BlockState)) {
+                grids[color] = new FaceGrid(originPos, size, color);
+            }
+            renderData.grids = grids;
+
+            let result = true;
+            switch(renderData.mode) {
+                case RenderMode.All:
+                    result = await RenderTool.renderAllBlocks(structName, grids);
+                    break;
+                case RenderMode.SingleLayer:
+                    result = await RenderTool.renderLayerBlocks(structName, renderData.layerIndex, grids);
+                    break;
+                case RenderMode.BelowLayer:
+                    result = await RenderTool.renderBelowLayerBlocks(structName, renderData.layerIndex, grids);
+                    break;
+                case RenderMode.AboveLayer:
+                    result = await RenderTool.renderAboveLayerBlocks(structName, renderData.layerIndex, grids);
+                    break;
+            }
+            
+            if (result === false) hasUnloadedChunks = true;
+
+            this.commitParticles(renderData);
+        } finally {
+            renderData.scanning = false;
+            // Retry if incomplete
+            if (hasUnloadedChunks) {
+                setTimeout(() => this.scanStructure(structName), 1000);
+            }
+        }
+    }
+
+    commitParticles(renderData) {
+        const newParticles = [];
+        for (const grid of Object.values(renderData.grids)) {
+            grid.greedy(); // Process greedy mesh
+            const parts = grid.getParticles();
+            for(const p of parts) newParticles.push(p);
+        }
+        renderData.particles = newParticles;
+    }
+
+    async loop() {
+        const start = Date.now();
+        let hasActive = false;
+
+        for (const renderData of this.renders.values()) {
+            if (renderData.mode === RenderMode.Off) continue;
+            if (renderData.particles.length > 0) hasActive = true;
+            
+            for (const p of renderData.particles) {
+                this.ps.spawnParticle(p.pos, p.identifier);
+            }
+        }
+
+        const end = Date.now();
+        const elapsed = end - start;
+        let delay = particleLifetime - elapsed;
+        if (delay < 50) delay = 50;
+        
+        // Keep loop running
+        if (!hasActive) {
+            setTimeout(this.loop.bind(this), 1000); 
+        } else {
+            setTimeout(this.loop.bind(this), delay);
+        }
+    }
+
+    async getMaterials(structName, player) {
+        if (!manager.hasStructure(structName)) {
+            Event.trigger(Events.GUI_SEND_MATERIALS, player, [], 0);
+            return;
+        }
+
+        const renderData = this.renders.get(structName);
+        if (!renderData) return;
+
+        const mode = renderData.mode;
+        const layerIndex = renderData.layerIndex;
+        const size = manager.getSize(structName);
+        const originPos = manager.getOriginPos(structName);
+
+        let yMin = 0, yMax = size.y;
+        if (mode === RenderMode.SingleLayer) {
+            yMin = layerIndex; yMax = layerIndex + 1;
+        } else if (mode === RenderMode.BelowLayer) {
+            yMax = layerIndex + 1;
+        } else if (mode === RenderMode.AboveLayer) {
+            yMin = layerIndex;
+        } else if (mode === RenderMode.Off) {
+            yMax = 0;
+        }
+        
+        yMin = Math.max(0, yMin);
+        yMax = Math.min(size.y, yMax);
+
+        const pendingBlocks = new Map();
+        let totalBlocksInView = 0;
+        
+        // Notify player
+        const progressTimer = setInterval(() => {
+            player.sendText(`正在获取材料列表 §l${structName}`, 5);
+        }, 1000);
+
+        for (let y = yMin; y < yMax; y++) {
+            await RenderTool.checkYield();
+            for (let x = 0; x < size.x; x++) {
+                for (let z = 0; z < size.z; z++) {
+                     const { blockData } = manager.getBlockData(structName, { x, y, z });
+                     if (blacklist.includes(blockData.name)) continue;
+                     
+                     const name = blockData.name;
+                     if (name === "minecraft:air") continue;
+                     if (!name.includes('flowing_')) totalBlocksInView++;
+
+                     const need = await RenderTool.checkBlockNeeding(
+                         originPos.x + x, originPos.y + y, originPos.z + z, originPos.dimid, name
+                     );
+                     
+                     if (need) pendingBlocks.set(name, (pendingBlocks.get(name) || 0) + 1);
+                }
+            }
+        }
+
+        clearInterval(progressTimer);
+        const results = Array.from(pendingBlocks.entries()).map(([blockName, count]) => ({ blockName, count }));
+        Event.trigger(Events.GUI_SEND_MATERIALS, player, results, totalBlocksInView);
+    }
 }
 
 class RenderTool {
-  static renderBlock(pos, expected) {
-    const block = mc.getBlock(pos);
-    if (!block) return false;
-    const blockType = expected.name;
-    if (block.type === 'minecraft:air' && blockType !== 'minecraft:air') {
-      Particle.drawCuboid(pos, BlockState.Lost);
-      return true;
-    }
-    else if (blockType === 'minecraft:air' && block.type !== 'minecraft:air') {
-      Particle.drawCuboid(pos, BlockState.Extra);
-      return true;
-    }
-    else if (block.type !== blockType) {
-      Particle.drawCuboid(pos, BlockState.WrongType);
-      return true;
-    }
-    else if (!HelperUtils.ObjectEquals(HelperUtils.oneToTrue(block.getBlockState()), expected.states)) {
-      // logger.info(`Expected states: ${JSON.stringify(expected.states)}, Actual states: ${JSON.stringify(block.getBlockState())}`);
-      Particle.drawCuboid(pos, BlockState.WrongState);
-      return true;
-    }
-    return false;
-  }
+    static startTime = 0;
+    static MAX_EXECUTION_TIME_MS = 20;
 
-  static async renderAllBlocks(structName) {
-    if (!manager.hasStructure(structName)) return;
-    const size = manager.getSize(structName);
-    for (let y = 0; y < size.y; y++) {
-      if (Render.interrupt) return;
-      await RenderTool.renderPlane(structName, y);
-    }
-  }
-
-  static renderPlane(structName, sy) {
-    return new Promise((resolve) => {
-      const size = manager.getSize(structName);
-      if(!size) return resolve();
-      let sx = 0;
-
-      const run = () => {
-        if (Render.interrupt) {
-          resolve();
-          return;
+    static async checkYield() {
+        if (Date.now() - RenderTool.startTime > RenderTool.MAX_EXECUTION_TIME_MS) {
+            await new Promise(resolve => setTimeout(resolve, 10));
+            RenderTool.startTime = Date.now();
         }
-        while (sx < size.x) {
-          const success = RenderTool.renderLine(structName, sx, sy);
-          sx++;
+    }
 
-          if (success) {
-            setTimeout(run, displayInterval);
-            return;
-          }
+    static async renderAllBlocks(structName, grids) {
+        if (!manager.hasStructure(structName)) return true;
+        RenderTool.startTime = Date.now();
+        const size = manager.getSize(structName);
+        let success = true;
+        for (let y = 0; y < size.y; y++) {
+            if (Render.interrupt) return success;
+            if (!await RenderTool.renderPlane(structName, y, grids)) success = false;
         }
-        resolve();
-      };
-      run();
-    });
-  }
+        return success;
+    }
+
+    static async renderPlane(structName, sy, grids) {
+        const size = manager.getSize(structName);
+        if (!size) return true;
+        await RenderTool.checkYield();
         
-  static renderLine(structName, sx, sy) {
-    let result = false;
-
-    const size = manager.getSize(structName);
-    const originPos = manager.getOriginPos(structName);
-    const start = sy * size.x * size.z + sx * size.z;
-    const end = start + size.z;
-
-    let z = 0;
-    for (let i = start; i < end; i++) {
-      const { blockData } = manager.getBlockData(structName, i);
-      const pos = new IntPos(originPos.x + sx, originPos.y + sy, originPos.z + z, originPos.dimid);
-      result = RenderTool.renderBlock(pos, blockData) || result;
-      z++;
+        const originPos = manager.getOriginPos(structName);
+        const start = sy * size.x * size.z;
+        let success = true;
+        
+        // To avoid excessive helper calls, iterating directly
+        for (let sx = 0; sx < size.x; sx++) {
+             for (let sz = 0; sz < size.z; sz++) {
+                 const i = start + sx * size.z + sz;
+                 const { blockData } = manager.getBlockData(structName, i);
+                 const pos = new IntPos(originPos.x + sx, originPos.y + sy, originPos.z + sz, originPos.dimid);
+                 if (!RenderTool.renderBlock(pos, {x: sx, y: sy, z: sz}, blockData, grids)) success = false;
+             }
+        }
+        return success;
     }
 
-    return result;
-  }
-
-  static renderLayerBlocks(structName, slayerIndex) {
-    const size = manager.getSize(structName);
-    if (slayerIndex < 0 || slayerIndex >= size.y) return;
-    RenderTool.renderPlane(structName, slayerIndex);
-  }
-
-  static async renderBelowLayerBlocks(structName, slayerIndex) {
-    for (let sy = 0; sy <= slayerIndex; sy++) {
-      if (Render.interrupt) return;
-      await RenderTool.renderPlane(structName, sy);
+    static async renderLayerBlocks(structName, layerIndex, grids) {
+        const size = manager.getSize(structName);
+        if (layerIndex >= 0 && layerIndex < size.y) {
+            RenderTool.startTime = Date.now();
+            return await RenderTool.renderPlane(structName, layerIndex, grids);
+        }
+        return true;
     }
-  }
 
-  static async renderAboveLayerBlocks(structName, slayerIndex) {
-    const size = manager.getSize(structName);
-    for (let sy = slayerIndex; sy < size.y; sy++) {
-      if (Render.interrupt) return;
-      await RenderTool.renderPlane(structName, sy);
+    static async renderBelowLayerBlocks(structName, layerIndex, grids) {
+        RenderTool.startTime = Date.now();
+        let success = true;
+        for (let y = 0; y <= layerIndex; y++) {
+             if (Render.interrupt) return success;
+             if (!await RenderTool.renderPlane(structName, y, grids)) success = false;
+        }
+        return success;
     }
-  }
+
+    static async renderAboveLayerBlocks(structName, layerIndex, grids) {
+        const size = manager.getSize(structName);
+        RenderTool.startTime = Date.now();
+        let success = true;
+        for (let y = layerIndex; y < size.y; y++) {
+            if (Render.interrupt) return success;
+            if (!await RenderTool.renderPlane(structName, y, grids)) success = false;
+        }
+        return success;
+    }
+
+    static renderBlock(pos, localPos, expected, grids) {
+        const block = mc.getBlock(pos);
+        if (!block) return false;
+        
+        const expectedName = expected.name;
+        let errorState = null;
+
+        if (block.type === 'minecraft:air' && expectedName !== 'minecraft:air') errorState = BlockState.Lost;
+        else if (expectedName === 'minecraft:air' && block.type !== 'minecraft:air') errorState = BlockState.Extra;
+        else if (block.type !== expectedName) errorState = BlockState.WrongType;
+        else if (!HelperUtils.ObjectEquals(block.getBlockState(), HelperUtils.trueToOne(expected.states))) errorState = BlockState.WrongState;
+
+        for (const [state, grid] of Object.entries(grids)) {
+            if (state === errorState) grid.setTrue(localPos);
+            else grid.setFalse(localPos);
+        }
+        return true;
+    }
+
+    static checkNeedLogic(actualType, expectedName) {
+        if (actualType === 'minecraft:bubble_column') actualType = 'minecraft:water';
+        if (actualType.includes('flowing_')) return false;
+        return actualType !== expectedName;
+    }
+
+    static checkBlockNeeding(bx, by, bz, dimid, expectedName) {
+        return new Promise(resolve => {
+            const block = mc.getBlock(bx, by, bz, dimid);
+            if (block) return resolve(RenderTool.checkNeedLogic(block.type, expectedName));
+            
+            const interval = setInterval(() => {
+                const b = mc.getBlock(bx, by, bz, dimid);
+                if (b) {
+                    clearInterval(interval);
+                    resolve(RenderTool.checkNeedLogic(b.type, expectedName));
+                }
+            }, 50);
+        });
+    }
+}
+
+class FaceGrid {
+    constructor(startPos, size, color) {
+        this.needGreedys = new Set(); // Stores "face,layer" strings
+        this.color = color;
+        this.particlesDirty = false;
+        this.particles = [];
+        this.pos = startPos;
+        this.sizeX = size.x; this.sizeY = size.y; this.sizeZ = size.z;
+        
+        // 3D Grid
+        this.grid = Array.from({length: this.sizeX}, () => Array.from({length: this.sizeY}, () => new Array(this.sizeZ).fill(false)));
+        
+        // 6 Directions Faces
+        this.Faces = [
+            Array.from({length: this.sizeX}, () => Array.from({length: this.sizeZ}, () => new Array(this.sizeY).fill(false))), // xp
+            Array.from({length: this.sizeX}, () => Array.from({length: this.sizeZ}, () => new Array(this.sizeY).fill(false))), // xn
+            Array.from({length: this.sizeY}, () => Array.from({length: this.sizeX}, () => new Array(this.sizeZ).fill(false))), // yp
+            Array.from({length: this.sizeY}, () => Array.from({length: this.sizeX}, () => new Array(this.sizeZ).fill(false))), // yn
+            Array.from({length: this.sizeZ}, () => Array.from({length: this.sizeX}, () => new Array(this.sizeY).fill(false))), // zp
+            Array.from({length: this.sizeZ}, () => Array.from({length: this.sizeX}, () => new Array(this.sizeY).fill(false)))  // zn
+        ];
+        
+        this.facesGreedy = new Map(); 
+    }
+
+    updatePos(newPos) {
+        if (this.pos.x !== newPos.x || this.pos.y !== newPos.y || this.pos.z !== newPos.z || this.pos.dimid !== newPos.dimid) {
+            this.pos = newPos;
+            this.particlesDirty = true;
+        }
+    }
+
+    setTrue(pos) {
+        const {x, y, z} = pos;
+        if (this.grid[x][y][z]) return;
+        this.grid[x][y][z] = true;
+
+        if (this.color === BlockState.Lost) {
+            // Blue (Lost): Render all faces independently (maintain box integrity)
+            this.Faces[0][x][z][y] = true; this.Faces[1][x][z][y] = true;
+            this.Faces[2][y][x][z] = true; this.Faces[3][y][x][z] = true;
+            this.Faces[4][z][x][y] = true; this.Faces[5][z][x][y] = true;
+            this.addDirty(x, y, z);
+        } else {
+            // Others: Cull internal faces ONLY if neighbor has same color (is in same grid)
+            
+            // Check neighbors in THIS grid (same color)
+            // If neighbor exists (true), then hide shared face (cull)
+            // If neighbor empty (false), then show face
+            const xp = x >= this.sizeX - 1 || !this.grid[x+1][y][z];
+            const xn = x <= 0              || !this.grid[x-1][y][z];
+            const yp = y >= this.sizeY - 1 || !this.grid[x][y+1][z];
+            const yn = y <= 0              || !this.grid[x][y-1][z];
+            const zp = z >= this.sizeZ - 1 || !this.grid[x][y][z+1];
+            const zn = z <= 0              || !this.grid[x][y][z-1];
+
+            this.Faces[0][x][z][y] = xp; this.Faces[1][x][z][y] = xn;
+            this.Faces[2][y][x][z] = yp; this.Faces[3][y][x][z] = yn;
+            this.Faces[4][z][x][y] = zp; this.Faces[5][z][x][y] = zn;
+            this.addDirty(x, y, z);
+
+            // Update neighbors of SAME COLOR
+            // If I am now filled, neighbor's face looking at me should be hidden
+            if (x < this.sizeX - 1 && this.grid[x+1][y][z]) { this.Faces[1][x+1][z][y] = false; this.addDirty(x+1, y, z); }
+            if (x > 0              && this.grid[x-1][y][z]) { this.Faces[0][x-1][z][y] = false; this.addDirty(x-1, y, z); }
+            
+            if (y < this.sizeY - 1 && this.grid[x][y+1][z]) { this.Faces[3][y+1][x][z] = false; this.addDirty(x, y+1, z); }
+            if (y > 0              && this.grid[x][y-1][z]) { this.Faces[2][y-1][x][z] = false; this.addDirty(x, y-1, z); }
+            
+            if (z < this.sizeZ - 1 && this.grid[x][y][z+1]) { this.Faces[5][z+1][x][y] = false; this.addDirty(x, y, z+1); }
+            if (z > 0              && this.grid[x][y][z-1]) { this.Faces[4][z-1][x][y] = false; this.addDirty(x, y, z-1); }
+        }
+    }
+    
+    setFalse(pos) {
+        const {x, y, z} = pos;
+        if (!this.grid[x][y][z]) return;
+        this.grid[x][y][z] = false;
+
+        this.Faces[0][x][z][y] = false; this.Faces[1][x][z][y] = false;
+        this.Faces[2][y][x][z] = false; this.Faces[3][y][x][z] = false;
+        this.Faces[4][z][x][y] = false; this.Faces[5][z][x][y] = false;
+        this.addDirty(x, y, z);
+
+        if (this.color !== BlockState.Lost) {
+            // Update neighbors of SAME COLOR
+            // If I am removed, neighbor's face looking at me should be likely shown (check its neighbor status? No, I am its neighbor and I am empty)
+            if (x < this.sizeX - 1 && this.grid[x+1][y][z]) { this.Faces[1][x+1][z][y] = true; this.addDirty(x+1, y, z); }
+            if (x > 0              && this.grid[x-1][y][z]) { this.Faces[0][x-1][z][y] = true; this.addDirty(x-1, y, z); }
+            
+            if (y < this.sizeY - 1 && this.grid[x][y+1][z]) { this.Faces[3][y+1][x][z] = true; this.addDirty(x, y+1, z); }
+            if (y > 0              && this.grid[x][y-1][z]) { this.Faces[2][y-1][x][z] = true; this.addDirty(x, y-1, z); }
+            
+            if (z < this.sizeZ - 1 && this.grid[x][y][z+1]) { this.Faces[5][z+1][x][y] = true; this.addDirty(x, y, z+1); }
+            if (z > 0              && this.grid[x][y][z-1]) { this.Faces[4][z-1][x][y] = true; this.addDirty(x, y, z-1); }
+        }
+    }
+
+    addDirty(x, y, z) {
+        this.needGreedys.add(`0,${x}`); this.needGreedys.add(`1,${x}`);
+        this.needGreedys.add(`2,${y}`); this.needGreedys.add(`3,${y}`);
+        this.needGreedys.add(`4,${z}`); this.needGreedys.add(`5,${z}`);
+    }
+
+    greedy() {
+        if (this.needGreedys.size === 0) return;
+        this.particlesDirty = true;
+        for (const item of this.needGreedys) {
+            const [face, layer] = item.split(',').map(Number);
+            this.meshFace(face, layer);
+        }
+        this.needGreedys.clear();
+    }
+
+    meshFace(faceStr, layer) {
+        const face = Number(faceStr);
+        const faceLayer = this.Faces[face][layer];
+        const width = faceLayer.length;
+        const height = faceLayer[0].length;
+        const visited = Array.from({ length: width }, () => new Array(height).fill(false));
+        
+        // Clear old results for this face/layer
+        const prefix = `${face},${layer}`;
+        for (const key of this.facesGreedy.keys()) {
+           if (key.startsWith(prefix)) this.facesGreedy.delete(key);
+        }
+
+        for (let w = 0; w < width; w++) {
+            let h = 0;
+            while (h < height) {
+                if (visited[w][h] || !faceLayer[w][h]) { h++; continue; }
+                
+                let maxHeight = 1;
+                for (let y = 1; y < Math.min(12, height - h); y++) { // 12 was maxSize
+                     if (!faceLayer[w][h+y]) break;
+                     maxHeight = y + 1;
+                }
+                
+                let maxWidth = 1;
+                for (let x = 1; x < Math.min(12, width - w); x++) {
+                    let valid = true;
+                    for (let y = h; y < h + maxHeight; y++) {
+                        if (!faceLayer[w+x][y]) { valid = false; break; }
+                    }
+                    if (!valid) break;
+                    maxWidth = x + 1;
+                }
+                
+                for(let x = w; x < w+maxWidth; x++) {
+                    for(let y = h; y < h+maxHeight; y++) visited[x][y] = true;
+                }
+                
+                this.facesGreedy.set(`${face},${layer},${w},${h}`, { w: maxWidth, h: maxHeight });
+                h += maxHeight; // Skip processed
+            }
+        }
+    }
+
+    getParticles() {
+        if (!this.particlesDirty) return this.particles;
+        this.particlesDirty = false;
+        
+        this.particles = [];
+        const isB = this.color === BlockState.Lost;
+        const val = isB ? 1.0/32.0 : -1.0/32.0;
+        const offsetP = 1.0 - val;
+        const offsetN = val;
+        
+        for (const [key, size] of this.facesGreedy) {
+            const [face, layer, i, j] = key.split(',').map(Number);
+            let x, y, z;
+            
+            if (face === 0) { // +X
+                x = this.pos.x + layer + offsetP;
+                z = this.pos.z + i + size.w / 2.0;
+                y = this.pos.y + j + size.h / 2.0;
+            } else if (face === 1) { // -X
+                x = this.pos.x + layer + offsetN;
+                z = this.pos.z + i + size.w / 2.0;
+                y = this.pos.y + j + size.h / 2.0;
+            } else if (face === 2) { // +Y
+                y = this.pos.y + layer + offsetP;
+                x = this.pos.x + i + size.w / 2.0;
+                z = this.pos.z + j + size.h / 2.0;
+            } else if (face === 3) { // -Y
+                y = this.pos.y + layer + offsetN;
+                x = this.pos.x + i + size.w / 2.0;
+                z = this.pos.z + j + size.h / 2.0;
+            } else if (face === 4) { // +Z
+                z = this.pos.z + layer + offsetP;
+                x = this.pos.x + i + size.w / 2.0;
+                y = this.pos.y + j + size.h / 2.0;
+            } else { // -Z
+                z = this.pos.z + layer + offsetN;
+                x = this.pos.x + i + size.w / 2.0;
+                y = this.pos.y + j + size.h / 2.0;
+            }
+            
+            const identifier = `face_${Math.floor(face / 2)}_${size.w}X${size.h}_${this.color}`;
+            this.particles.push({ pos: new FloatPos(x, y, z, this.pos.dimid), identifier });
+        }
+        return this.particles;
+    }
 }
 
 export class RenderMode {
-  static All = 0;
-  static SingleLayer = 1;
-  static BelowLayer  = 2;
-  static AboveLayer = 3;
-  static Off = 4;
-  static modes_zh = ["全部", "单层", "此层之下", "此层之上", "关闭"];
+    static All = 0;
+    static SingleLayer = 1;
+    static BelowLayer = 2;
+    static AboveLayer = 3;
+    static Off = 4;
+    static modes_zh = ["全部", "单层", "此层之下", "此层之上", "关闭"];
 }
 
-class RenderMgr {
-  constructor() {
-    this.mode = RenderMode.All;
-    this.layerIndex = 0;
-    this.renders = new Map(); // structName -> { mode, layerIndex }
-    // this.turnOff = []; // 已弃用该功能
-    this.interrupt = false; // 用于强制打断所有渲染任务
-  }
-
-  init() {
-    Event.listen(Events.RENDER_SET_RENDER_MODE, this.#setMode.bind(this));
-    Event.listen(Events.RENDER_SET_LAYER_INDEX, this.#setLayerIndex.bind(this));
-    Event.listen(Events.RENDER_UPDATE_DATA, this.#updateData.bind(this));
-    Event.listen(Events.MANAGER_REMOVE_STRUCTURE, this.#updateWithManager.bind(this));
-    Event.listen(Events.MANAGER_ADD_STRUCTURE, this.#updateWithManager.bind(this));
-    Event.listen(Events.RENDER_GET_MATERIALS, this.getMaterials.bind(this));
-    Event.listen(Events.RENDER_STOP_ALL_RENDERING, () => { this.interrupt = true; });
-    
-    this.#updateWithManager();
-
-    const database = new JsonConfigFile("./plugins/ResinClumps/config/database.json");
-    for (const [name, item] of Object.entries(database.get('structures', {}))) {
-      const max = manager.getSize(name).y - 1;
-      if (item.layerIndex < 0) this.renders.set(name, { mode: RenderMode.Off, layerIndex: 0 });
-      else if (item.layerIndex < max) this.renders.set(name, { mode: item.mode, layerIndex: item.layerIndex });
-      else this.renders.set(name, { mode: RenderMode.Off, layerIndex: max });
-    }
-
-    this.mode = database.get('renderMode', RenderMode.All);
-    this.layerIndex = database.get('layerIndex', 0);
-    database.close();
-
-    this.#updateData();
-  }
-
-  getMode(structName = null) {
-    if (structName === null) return this.mode;
-    else return this.renders.get(structName)?.mode || this.mode;
-  }
-
-  getLayerIndex(structName = null) {
-    if (structName === null) return this.layerIndex;
-    else return this.renders.get(structName)?.layerIndex || this.layerIndex;
-  }
-  
-  #setMode(mode, structName = null) { // mode 前置符合原使用习惯
-    if (structName === null) this.mode = mode;
-    else this.renders.get(structName).mode = mode;
-    // this.#updateData();  // 自行调用
-  }
-
-  #setLayerIndex(layerIndex, structName = null) { // layerIndex 前置符合原使用习惯
-    if (structName === null) this.layerIndex = layerIndex;
-    else this.renders.get(structName).layerIndex = layerIndex;
-    // this.#updateData();  // 自行调用
-  }
-
-  #updateWithManager() {
-    const structNames = manager.getAllStructureNames();
-    for (const structName of structNames) {
-      if (!this.renders.has(structName)) {
-        const ori = manager.getOriginPos(structName).y;
-        const max = manager.getSize(structName).y - 1;
-        if (this.layerIndex - ori < 0) {
-          this.renders.set(structName, { mode: RenderMode.Off, layerIndex: 0 });
-        } else if (this.layerIndex < max) {
-          this.renders.set(structName, { mode: RenderMode.SingleLayer, layerIndex: this.layerIndex - ori });
-        } else {
-          this.renders.set(structName, { mode: RenderMode.Off, layerIndex: max });
-        }
-      }
-    }
-    for (const structName of this.renders.keys()) {
-      if (!structNames.includes(structName)) {
-        this.renders.delete(structName);  // Manager 数据为标准, 只有它保存了结构数据
-      }
-    }
-    // this.#updateData();
-  }
-
-  #updateData() {
-    const database = new JsonConfigFile("./plugins/ResinClumps/config/database.json", '{}');
-    const structObj = {};
-    for (const [name, item] of this.renders.entries()) {
-      const old = database.get('structures', {})[name] || {};
-      structObj[name] = {
-        filePath: old.filePath,
-        originPos: old.originPos,
-        posLocked: old.posLocked,
-        mode: item.mode,
-        layerIndex: item.layerIndex,
-      };
-    }
-    database.set('structures', structObj);
-
-    database.set('renderMode', this.mode);
-    database.set('layerIndex', this.layerIndex);
-
-    database.close();
-    return this;
-  }
-
-  render() {
-    if (this.interrupt) this.interrupt = false;
-    for (const [structName, renderData] of this.renders) {
-      switch (renderData.mode) {
-        case RenderMode.All:
-          RenderTool.renderAllBlocks(structName);
-          break;
-        case RenderMode.SingleLayer:
-          RenderTool.renderLayerBlocks(structName, renderData.layerIndex);
-          break;
-        case RenderMode.BelowLayer:
-          RenderTool.renderBelowLayerBlocks(structName, renderData.layerIndex);
-          break;
-        case RenderMode.AboveLayer:
-          RenderTool.renderAboveLayerBlocks(structName, renderData.layerIndex);
-          break;
-        case RenderMode.Off:
-          break;
-        default:
-          throw new Error(`Unknown render mode: ${renderData.mode} for structure ${structName}`);
-      }
-    }
-  }
-
-  async getMaterials(structName, player) {
-    if (!manager.hasStructure(structName)) {
-      Event.trigger(Events.GUI_SEND_MATERIALS, player, [], 0);
-      return;
-    }
-
-    const mode = this.getMode(structName);
-    const layerIndex = this.getLayerIndex(structName);
-    const pendingBlocks = new Map(); // blockName -> count
-    
-    const originPos = manager.getOriginPos(structName);
-    const size = manager.getSize(structName);
-    
-    // Determine Y range based on render mode
-    let yMin = 0;
-    let yMax = size.y;
-
-    switch(mode) {
-      case RenderMode.SingleLayer:
-        yMin = layerIndex;
-        yMax = layerIndex + 1;
-        break;
-      case RenderMode.BelowLayer:
-        yMax = layerIndex + 1;
-        break;
-      case RenderMode.AboveLayer:
-        yMin = layerIndex;
-        break;
-      case RenderMode.Off:
-        yMax = 0; // Skip
-        break;
-    }
-
-    // Clamp values
-    yMin = Math.max(0, yMin);
-    yMax = Math.min(size.y, yMax);
-    
-    const progressInterval = setInterval(() => {
-      player.sendText(`正在获取材料列表 §l${structName}`, 5);
-    }, 1000);
-  
-    let totalBlocksInView = 0;
-
-    for (let y = yMin; y < yMax; y++) {
-      for (let x = 0; x < size.x; x++) {
-        for (let z = 0; z < size.z; z++) {
-          const { blockData } = manager.getBlockData(structName, { x, y, z });
-
-          if (blacklist.includes(blockData.name)) continue;
-          
-          const targetName = blockData.name;
-          
-          // 跳过空气
-          if (targetName === "minecraft:air") {
-            continue;
-          }
-
-          if (!targetName.includes('flowing_')) {
-            totalBlocksInView++;
-          }
-
-          const needFix = await RenderMgr.#needOneBlock(
-            originPos.x + x,
-            originPos.y + y,
-            originPos.z + z,
-            originPos.dimid,
-            targetName
-          );
-          
-          if (needFix) {
-            pendingBlocks.set(targetName, (pendingBlocks.get(targetName) || 0) + 1);
-          }
-        }
-      }
-    }
-  
-    clearInterval(progressInterval);
-  
-    // 转换为结果数组
-    const results = Array.from(pendingBlocks.entries()).map(([blockName, count]) => ({ blockName, count }));
-    
-    Event.trigger(Events.GUI_SEND_MATERIALS, player, results, totalBlocksInView);
-  }
-  
-  // 核心优化：同步优先 + 无限重试
-  static #needOneBlock(bx, by, bz, dimid, expectedName) {
-    return new Promise(resolve => {
-      // 优先同步尝试
-      const block = mc.getBlock(bx, by, bz, dimid);
-      if (block) {
-        // 同步resolve, await立即继续
-        return resolve(RenderMgr.#checkNeed(block.type, expectedName));
-      }
-      
-      // 每 50 ms 尝试获取方块状态，直到成功
-      const interval = setInterval(() => {
-        const block = mc.getBlock(bx, by, bz, dimid);
-        if (block) {
-          clearInterval(interval);
-          resolve(RenderMgr.#checkNeed(block.type, expectedName));
-        }
-      }, 50);
-    });
-  }
-  
-  // 静态工具: 判断是否需要
-  static #checkNeed(actualType, expectedName) {
-    // 气泡柱视为水
-    if (actualType === 'minecraft:bubble_column') actualType = 'minecraft:water';
-    
-    // 流动液体不计入材料
-    if (actualType.includes('flowing_')) return false;
-    
-    // 此处做了多功能, 可读性稍差
-    return actualType !== expectedName;
-  }
-
+class BlockState {
+    static Lost = 'b';
+    static WrongType = 'r';
+    static WrongState = 'rg';
+    static Extra = 'rb';
 }
 
 export const Render = new RenderMgr();
 
 export function RenderInit() {
-  if (typeof Event === 'undefined') throw new Error("Event module is required for Render module.");
-  if (typeof manager === 'undefined') throw new Error("Manager module is required for Render module.");
-  if (particleLifetime < 50) throw new Error("unsafe particleLifetime setting in config.json, it should be at least 50ms.");
-  
-  ps = new ParticleSpawner(displayRadius, false, false); // 在这里初始化
-  
+  if (typeof Event === 'undefined') throw new Error("Event module is required.");
   Render.init();
-  setInterval(() => {
-    Render.render();
-  }, particleLifetime - 50);
-  // logger.info("Render module initialized.");
+  
+  logger.info("All grids scanned.");
 }

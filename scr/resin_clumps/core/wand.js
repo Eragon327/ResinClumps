@@ -29,7 +29,7 @@ class WandMgr {
 
     const structNames = manager.getAllStructureNames();
 
-    let database = new JsonConfigFile("./plugins/ResinClumps/config/database.json", '{}');
+    const database = new JsonConfigFile("./plugins/ResinClumps/config/database.json", '{}');
     const playerDataObj = database.get('player', {});
     database.close();
     for (const [playerUUID, playerData] of Object.entries(playerDataObj)) {
@@ -39,13 +39,8 @@ class WandMgr {
 
     this.#updatePlayerDataToFile();
 
-    database = new JsonConfigFile("./plugins/ResinClumps/config/database.json", '{}');
-    const oldID = database.get('showMessageID', null);
-    try {
-      if (typeof oldID === "number") clearInterval(oldID);
-    } catch (e) { }
-    database.set('showMessageID', setInterval(this.showMessage.bind(this), 1000));
-    database.close();
+    const interval = setInterval(this.showMessage.bind(this), 1000);
+    ll.onUnload(() => { clearInterval(interval); });
 
     // logger.info("Wand Manager initialized.");
   }
@@ -173,6 +168,7 @@ class WandMgr {
       player.sendText(`已将原理图移动到 (${block.pos.x}, ${block.pos.y}, ${block.pos.z})`, 5);
     }
     Event.trigger(Events.MANAGER_UPDATE_DATA);
+    Event.trigger(Events.RENDER_REFRESH_GRIDS, structName);
   }
 
   #easyPlace(player) {
@@ -210,8 +206,9 @@ class WandMgr {
         return;
       }
       Event.trigger(Events.RENDER_SET_LAYER_INDEX, newLayerIndex, controlingStruct);
-      player.sendText(`当前层高度: ${newLayerIndex}`, 5);
+      player.sendText(`当前层高度: ${newLayerIndex + 1}`, 5); // 显示给用户时高度 +1
       Event.trigger(Events.RENDER_UPDATE_DATA, controlingStruct);
+      Event.trigger(Events.RENDER_REFRESH_GRIDS, controlingStruct);
     }
   }
 }

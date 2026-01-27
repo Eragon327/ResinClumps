@@ -69,8 +69,8 @@ class Manager {
         filePath: item.filePath,
         originPos: { x: item.originPos.x, y: item.originPos.y, z: item.originPos.z, dimid: item.originPos.dimid },
         posLocked: item.posLocked,
-        mode: old.mode,
-        layerIndex: old.layerIndex,
+        mode: old.mode ?? RenderMode.All,
+        layerIndex: old.layerIndex ?? 0,
       };
     }
     database.set('structures', structObj);
@@ -88,7 +88,7 @@ class Manager {
   }
 
   async #pasteStructure(structName, player) {
-    if(!player.isCreative) logger.fatal(`发现玩家 ${player.name} 非创造模式使用粘贴功能！`);
+    if(!player.isCreative) logger.fatal(`发现玩家 ${player.realName} 非创造模式使用粘贴功能！`);
     const configFile = new JsonConfigFile("./plugins/ResinClumps/config/config.json", '{}');
     const maxPasteSpeed = configFile.get('maxPasteSpeed', 65535);
     configFile.close();
@@ -161,6 +161,9 @@ class Manager {
       }
     }
     clearInterval(interval);
+
+    setTimeout(() => Event.trigger(Events.RENDER_REFRESH_GRIDS, structName), 1);
+
     player.sendText(`原理图 §l${structName} §r已粘贴至世界! `, 5);
   }
 
@@ -367,5 +370,6 @@ export function ManagerInit() {
   }
   Event.trigger(Events.MANAGER_UPDATE_DATA);
 
-  logger.info("Manager Module initialized.");
+  logger.info("All structures reloaded from database.");
+  // logger.info("Manager Module initialized.");
 }

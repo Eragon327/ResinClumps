@@ -72,8 +72,40 @@ export class Container {  // 全静态类
   }
 }
 
+let func = null;
+let place = null;
 export function ContainerInit() {
   if(typeof Event === 'undefined') throw new Error("Event module is required for Container module.");
   Event.listen(Events.CONTAINER_REMOVE_BLOCK_ITEM, Container.removeBlockItem);
+
+  // 直接把函数导出代码注入到排行榜文件中
+  const configFile = new JsonConfigFile("./plugins/ResinClumps/config/config.json", '{}');
+  const rankAdaption = configFile.get('rankAdaption', false);
+  configFile.close();
+  if (rankAdaption) {
+    if (File.exists("./plugins/B-Ranking/manifest.json")) { // 兼容 B-Ranking 插件
+      if (!File.readFrom("./plugins/B-Ranking/B-Ranking.js").endsWith("// ResinClumps automatic generated\n")) {
+        File.writeLine("./plugins/B-Ranking/B-Ranking.js",
+          '\nll.exports(handleScoreEvent, "BRanking", "handleScoreEvent"); \n// ResinClumps automatic generated');
+        mc.runcmd("ll reload B-Ranking");
+      }
+      func = ll.imports("BRanking", "handleScoreEvent");
+      place = "place";
+    } else if (File.exists("./plugins/Ranking/manifest.json")) { // 兼容 Ranking 插件
+      if (!File.readFrom("./plugins/Ranking/Ranking.js").endsWith("// ResinClumps automatic generated\n")) {
+        File.writeLine("./plugins/Ranking/Ranking.js",
+          '\nll.exports(Ranking.EventTriggered.bind(Ranking), "Ranking", "EventTriggered"); \n// ResinClumps automatic generated');
+        mc.runcmd("ll reload Ranking");
+      }
+      func = ll.imports("Ranking", "EventTriggered");
+      place = "Place";  // 怎么还有区分大小写的？
+    }
+  }
+
   // logger.info("Container module initialized.");
+}
+
+export function addRank(player, scoreToAdd) {
+  if (typeof func !== 'function') return;
+  for(let i = 0; i < scoreToAdd; i++) func(player, place);
 }

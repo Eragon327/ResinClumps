@@ -89,6 +89,7 @@ class GUI {
       Event.trigger(Events.WAND_CHANGE_MODE, player, WandMode.Placing);
       Event.trigger(Events.WAND_CHANGE_CONTROLING_STRUCT, player, structName);
       Event.trigger(Events.WAND_UPDATE_DATA, player);
+      Event.trigger(Events.RENDER_REFRESH_GRIDS, structName);
     } catch (e) {
       player.sendText(`§c加载原理图 §l${name} §r§c失败`, 5);
       logger.error(`Failed to load structure ${name}: ${e.message}`);
@@ -96,8 +97,6 @@ class GUI {
     }
     let text = `原理图 §l${name} §r已加载`;
     if (count > 1) text += ` 为 §l${structName}§r`;
-    const renderMode = Render.getMode();
-    if(renderMode !== RenderMode.All) text += `\n请注意当前渲染模式为: ${RenderMode.modes_zh[renderMode]}`;
     player.sendText(text, 5);
   }
 
@@ -163,6 +162,7 @@ class GUI {
         originPos.dimid = player.feetPos.dimid;
         Event.trigger(Events.MANAGER_CHANGER_ORIGIN_POS, structName, originPos);
         Event.trigger(Events.MANAGER_UPDATE_DATA);
+        Event.trigger(Events.RENDER_REFRESH_GRIDS, structName);
         player.sendText(`已将原理图移动到 (${originPos.x}, ${originPos.y}, ${originPos.z})`, 5);
         break;
       case "设置为主控":
@@ -175,8 +175,10 @@ class GUI {
         Event.trigger(Events.RENDER_STOP_ALL_RENDERING, player, structName);
         Event.trigger(Events.MANAGER_REMOVE_STRUCTURE, structName);
         Event.trigger(Events.MANAGER_UPDATE_DATA);
-        Event.trigger(Events.WAND_CHANGE_CONTROLING_STRUCT, player, null);
+        if (Wand.getControlingStruct(player) === structName)
+          Event.trigger(Events.WAND_CHANGE_CONTROLING_STRUCT, player, null);
         Event.trigger(Events.WAND_UPDATE_DATA, player);
+        Event.trigger(Events.RENDER_REFRESH_GRIDS, structName);
         player.sendText(`原理图 §l${structName} §r已移除`, 5);
         if (manager.cache.size > 0) {
           GUI.#sendLoadedStructureForm(player);
@@ -184,6 +186,7 @@ class GUI {
         break;
       case "创造放置":
         Event.trigger(Events.MANAGER_PASTE_STRUCTURE, structName, player);
+        // setTimeout(() => Event.trigger(Events.RENDER_REFRESH_GRIDS, structName), 1); // 放在 paste 函数里触发
         break;
       case "材料列表":
         Event.trigger(Events.RENDER_GET_MATERIALS, structName, player);
@@ -203,10 +206,13 @@ class GUI {
     form.setTitle(`原理图 ${structName} 渲染设置`);
     const currentRenderMode = Render.getMode(structName);
     form.addStepSlider("改变显示模式", RenderMode.modes_zh, currentRenderMode);
-    if (currentRenderMode !== RenderMode.All && currentRenderMode !== RenderMode.Off)
-      form.addInput("相对层高度",
-        Render.getLayerIndex(structName).toString(),
-        Render.getLayerIndex(structName).toString());
+    if (currentRenderMode !== RenderMode.All && currentRenderMode !== RenderMode.Off) {
+      const oldLayerIndex = (Render.getLayerIndex(structName) + 1).toString(); // 显示给用户时高度 +1
+      const toPlayer = Math.floor(player.feetPos.y) - manager.getOriginPos(structName).y + 1;
+      form.addInput(`相对层高度 (定位到玩家: ${toPlayer})`,
+        oldLayerIndex,
+        oldLayerIndex);
+    }
     form.setSubmitButton("确定");
     player.sendForm(form, (player, data) => GUI.#structureRenderFormCallback(player, data, structName));
   }
@@ -216,66 +222,44 @@ class GUI {
 
     const newRenderMode = data[0];
     const oldRenderMode = Render.getMode(structName);
+    let modeChanged = false;
     if (newRenderMode !== oldRenderMode) {
       Event.trigger(Events.RENDER_STOP_ALL_RENDERING);
       Event.trigger(Events.RENDER_SET_RENDER_MODE, newRenderMode, structName);
       Event.trigger(Events.RENDER_UPDATE_DATA);
 
-      if ((oldRenderMode === RenderMode.All || oldRenderMode === RenderMode.Off) &&
-        (newRenderMode !== RenderMode.All && newRenderMode !== RenderMode.Off)) {
+      modeChanged = true;
+      if (newRenderMode !== RenderMode.All && newRenderMode !== RenderMode.Off) {
         GUI.#sendStructureRenderForm(player, structName);
       }
     }
 
-    let newLayerIndex = Number(data[1]); // string --> number
+    let newLayerIndex = Number(data[1]) - 1; // string --> number --> 显示给用户时高度 +1, 所以这里要 -1
     if (Number.isNaN(newLayerIndex)) return;
     const max = manager.getSize(structName).y;
     if(newLayerIndex > max) newLayerIndex = max;
     if(newLayerIndex < 0) newLayerIndex = 0;
     const oldLayerIndex = Render.getLayerIndex(structName);
+    let layerChanged = false;
     if (newLayerIndex !== oldLayerIndex) {
       Event.trigger(Events.RENDER_SET_LAYER_INDEX, newLayerIndex, structName);
       Event.trigger(Events.RENDER_UPDATE_DATA);
+      layerChanged = true;
     }
+
+    const forceReset = modeChanged || layerChanged;
+    Event.trigger(Events.RENDER_REFRESH_GRIDS, structName, forceReset);
   }
     
   static #sendOptionsForm(player) {
     const form = mc.newCustomForm();
     form.setTitle("ResinClumps 配置");
-    const currentRenderMode = Render.getMode();
-    form.addStepSlider("改变默认显示模式", RenderMode.modes_zh, currentRenderMode);
-    if (currentRenderMode !== RenderMode.All && currentRenderMode !== RenderMode.Off)
-      form.addInput(`默认层高度\n定位到玩家: ${Math.floor(player.feetPos.y)}`,
-        Render.getLayerIndex().toString(),
-        Render.getLayerIndex().toString());
     form.setSubmitButton("确定");
     player.sendForm(form, GUI.#optionsFormCallback);
   }
 
   static #optionsFormCallback(player, data) {
     if (data === undefined) return;
-
-    const newRenderMode = data[0];
-    const oldRenderMode = Render.getMode();
-    if (newRenderMode !== oldRenderMode) {
-      Event.trigger(Events.RENDER_SET_RENDER_MODE, newRenderMode);
-      Event.trigger(Events.RENDER_UPDATE_DATA);
-
-      if ((oldRenderMode === RenderMode.All || oldRenderMode === RenderMode.Off) &&
-        (newRenderMode !== RenderMode.All && newRenderMode !== RenderMode.Off)) {
-        GUI.#sendOptionsForm(player);
-      }
-    }
-
-    let newLayerIndex = Number(data[1]); // string --> number
-    if (Number.isNaN(newLayerIndex)) return;
-    if(newLayerIndex > 319) newLayerIndex = 319;
-    if(newLayerIndex < -64) newLayerIndex = -64;
-    const oldLayerIndex = Render.getLayerIndex();
-    if (newLayerIndex !== oldLayerIndex) {
-      Event.trigger(Events.RENDER_SET_LAYER_INDEX, newLayerIndex);
-      Event.trigger(Events.RENDER_UPDATE_DATA);
-    }
   }
 
   static sendMaterialsForm(player, results, allCount) {

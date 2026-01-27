@@ -1,7 +1,7 @@
 import { Event, Events } from "../core/event.js";
 import { manager } from "../core/manager.js";
 import { Wand, WandMode } from "../core/wand.js";
-import { Container } from "./container.js";
+import { Container, addRank } from "./container.js";
 import { Render, RenderMode } from "../render/index.js";
 import { Nbt } from "../utils/nbt.js";
 import { HelperUtils } from "../utils/helpers.js";
@@ -13,6 +13,7 @@ configFile.close();
 
 export class EasyPlace {
   placeMode = PlaceMode.Normal;
+  placed = false;
 
   static run() {
     for (const player of mc.getOnlinePlayers()) {
@@ -109,6 +110,9 @@ export class EasyPlace {
       return false;
     
     mc.setBlock(bx, by, bz, dimid, Nbt.ObjectToNbt(blockData));
+
+    // Event.trigger(Events.RENDER_REFRESH_GRIDS, name, {x: bx, y: by, z: bz});
+
     if (player.isCreative) return true;
 
     let countToRemove = 1;
@@ -133,7 +137,7 @@ export class EasyPlace {
     Event.trigger(Events.CONTAINER_REMOVE_BLOCK_ITEM, player, blockData.name, countToRemove);
 
     if (rankAdaption) {
-      mc.addPlayerScore(player.uuid, "place", countToRemove);
+      addRank(player, countToRemove);
     }
 
     return true;
@@ -163,8 +167,7 @@ export class EasyPlace {
 
 export class PlaceMode {
   static Normal = 0;
-  static ReWrite = 1;
-  static Strengthen = 2;
+  static Range  = 1;  // TODO: 范围打印
 
   static init() {
     const configFile = new JsonConfigFile("./plugins/ResinClumps/config/config.json", '{}');
@@ -184,5 +187,16 @@ export class PlaceMode {
 
 export function EasyPlaceInit() {
   mc.listen("onTick", EasyPlace.run);
+  /*
+  mc.listen("afterPlaceBlock", (player, block) => { 
+      Event.trigger(Events.RENDER_REFRESH_GRIDS, block.pos); 
+  });
+  mc.listen("onDestroyBlock", (player, block) => { 
+      setTimeout(() => Event.trigger(Events.RENDER_REFRESH_GRIDS, block.pos), 1); // 等 BDS 处理完再刷新
+  });
+  */
+  mc.listen("onBlockChanged", (_before, after) => { 
+      setTimeout(() => Event.trigger(Events.RENDER_REFRESH_GRIDS, after.pos), 1); // 等 BDS 处理完再刷新
+  });
   // logger.info("EasyPlace module initialized.");
 }

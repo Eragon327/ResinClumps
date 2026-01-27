@@ -51,7 +51,9 @@ export const Events = Object.freeze({
   RENDER_SET_RENDER_MODE:         "render:setRenderMode",
   RENDER_UPDATE_DATA:             "render:updateData",
   RENDER_GET_MATERIALS:           "render:getMaterials",
+  RENDER_CHECK:                   "render:check",
   RENDER_STOP_ALL_RENDERING:      "render:stopAllRendering",
+  RENDER_REFRESH_GRIDS:           "render:refreshGrids",
 
   CONTAINER_REMOVE_BLOCK_ITEM:    "container:removeBlockItem",
 

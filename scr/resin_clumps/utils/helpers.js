@@ -69,12 +69,14 @@ export class HelperUtils {  // 全静态类
     return true;
   }
 
-  static oneToTrue(obj) {
+  static trueToOne(obj) {
+    obj = JSON.parse(JSON.stringify(obj)); // 深拷贝
+
     for (const key in obj) {
-      if (obj[key] === 1) {
-        obj[key] = true;
-      } else if (obj[key] === 0) {
-        obj[key] = false;
+      if (obj[key] === true) {
+        obj[key] = 1;
+      } else if (obj[key] === false) {
+        obj[key] = 0;
       }
     }
     return obj;

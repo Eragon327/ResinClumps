@@ -1,13 +1,13 @@
 {
     "placeDistance": 5,
     "displayRadius": 70,
-    "displayInterval": 1,
     "placeInterval": 1,
     "particleLifetime": 1550,
     "maxPasteSpeed": 65535,
     "BlackList": [
         "minecraft:piston_arm_collision",
         "minecraft:stick_piston_arm_collision",
+        "minecraft:moving_block",
         "minecraft:water",
         "minecraft:flowing_water",
         "minecraft:lava",
@@ -54,7 +54,24 @@
         "minecraft:brown_shulker_box",
         "minecraft:green_shulker_box",
         "minecraft:red_shulker_box",
-        "minecraft:black_shulker_box"
+        "minecraft:black_shulker_box",
+        "minecraft:bed",
+        "minecraft:whtie_bed",
+        "minecraft:orange_bed",
+        "minecraft:magenta_bed",
+        "minecraft:light_blue_bed",
+        "minecraft:yellow_bed",
+        "minecraft:lime_bed",
+        "minecraft:pink_bed",
+        "minecraft:gray_bed",
+        "minecraft:light_gray_bed",
+        "minecraft:cyan_bed",
+        "minecraft:purple_bed",
+        "minecraft:blue_bed",
+        "minecraft:brown_bed",
+        "minecraft:green_bed",
+        "minecraft:red_bed",
+        "minecraft:black_bed"
     ],
-    "rankAdaption": false
+    "rankAdaption": true
 }
