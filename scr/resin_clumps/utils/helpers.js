@@ -3,12 +3,12 @@ export class HelperUtils {  // 全静态类
   static toBaseDirection(direction) {
     const yawRad = direction.yaw * (Math.PI / 180);
     const pitchRad = direction.pitch * (Math.PI / 180);
-      
+
     const sinYaw = Math.sin(yawRad);
     const cosYaw = Math.cos(yawRad);
     const sinPitch = Math.sin(pitchRad);
     const cosPitch = Math.cos(pitchRad);
-    
+
     const d = {
       x: -cosPitch * sinYaw,
       y: -sinPitch,
@@ -21,7 +21,7 @@ export class HelperUtils {  // 全静态类
     if (max_abs < HelperUtils.#threshold) {
       return result;
     }
-    
+
     if (Math.abs(d.y) > Math.abs(d.x) && Math.abs(d.y) > Math.abs(d.z)) {
       if (d.y > 0) {
         result.y = 1;
@@ -79,6 +79,7 @@ export class HelperUtils {  // 全静态类
         obj[key] = 0;
       }
     }
+
     return obj;
   }
 
@@ -94,18 +95,69 @@ export class HelperUtils {  // 全静态类
   ]
   static enToNumber(numStr) {
     if (typeof numStr !== 'string') return NaN;
-    const en_ = numStr.split('_')[0];
-    const index = HelperUtils.#en_.indexOf(en_);
+    const en = numStr.split('_')[0];
+    const index = HelperUtils.#en_.indexOf(en);
     if (index === -1) return NaN;
     return index + 1;
   }
 
   static dims = ['主世界', '下界', '末地'];
-  
-  static zh_CN = new JsonConfigFile("./plugins/ResinClumps/scr/lang/zh_CN.json", '{}');
 
-  static trBlock(enName) {
-    return HelperUtils.zh_CN.get(`${enName}`, enName);
+  static trBlocks(results, content, currentCount, allCount) {// 全物品 ≈0.01s
+    if (!File.exists("./plugins/ResinClumps/scr/lang/zh_CN.json")) {//使用blockName
+      logger.error("./plugins/ResinClumps/scr/lang/zh_CN.json翻译文件缺失,使用blockName");
+
+      for (const item of results) {// 我不想再抽象一层
+        let count = item.count;
+        currentCount += count;
+        content += `\n${item.blockName} : ${count}`;
+        if (count >= 1728) {
+          content += ` = ${Math.floor(count / 1728)} 盒`;
+          count = count % 1728;
+          if (count >= 64) {
+            content += ` + ${Math.floor(count / 64)} 组`;
+            count = count % 64;
+          } else if (count > 0) {
+            content += ` + ${count} 个`;
+          }
+        } else if (count >= 64) {
+          content += ` = ${Math.floor(count / 64)} 组`;
+          count = count % 64;
+          if (count > 0) {
+            content += ` + ${count} 个`;
+          }
+        }
+      }
+    } else {
+      const zh_CN2 = new JsonConfigFile("./plugins/ResinClumps/scr/lang/zh_CN.json", '{}');
+
+      for (const item of results) {
+        let count = item.count;
+        currentCount += count;
+        content += `\n${zh_CN2.get(item.blockName)} : ${count}`;
+        if (count >= 1728) {
+          content += ` = ${Math.floor(count / 1728)} 盒`;
+          count = count % 1728;
+          if (count >= 64) {
+            content += ` + ${Math.floor(count / 64)} 组`;
+            count = count % 64;
+          } else if (count > 0) {
+            content += ` + ${count} 个`;
+          }
+        } else if (count >= 64) {
+          content += ` = ${Math.floor(count / 64)} 组`;
+          count = count % 64;
+          if (count > 0) {
+            content += ` + ${count} 个`;
+          }
+        }
+      }
+
+      zh_CN2.close();
+    }
+
+    content += `\n总计 ${currentCount} / ${allCount} 个方块, 完成度: ${((1 - currentCount / allCount) * 100).toFixed(2)}%%`;  // 两个 % 才能显示一个
+    return content;
   }
 
   static simplifyBlockName(enName) {

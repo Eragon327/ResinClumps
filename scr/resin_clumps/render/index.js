@@ -9,6 +9,7 @@ const blacklist = configFile.get('BlackList', []);
 const scanSpeed = configFile.get("scanSpeed", 3000);
 const renderSpeed = configFile.get("renderSpeed", 3000);
 const displayInterval = configFile.get("displayInterval", 50);
+const retryInterval = configFile.get("retryInterval", 5000);
 configFile.close();
 
 const shortTime = 50;  // 渲染循环与粒子生命周期的时间差, 确保粒子不会闪烁
@@ -184,12 +185,9 @@ class RenderMgr {
              if (mode === RenderMode.BelowLayer && ly > layerIndex) return;
              if (mode === RenderMode.AboveLayer && ly < layerIndex) return;
 
-             const key = `${lx},${ly},${lz}`;
-             const { blockData } = manager.getBlockData(structName, { x: lx, y: ly, z: lz });
              const blockPos = new IntPos(origin.x + lx, origin.y + ly, origin.z + lz, origin.dimid);
-             const localPos = { x: lx, y: ly, z: lz };
              
-             RenderTool.renderBlock(blockPos, localPos, blockData, renderData.grids);
+             RenderTool.renderBlock(blockPos, lx, ly, lz, blockData, renderData.grids);
              this.commitParticles(renderData);
         }
     }
@@ -254,7 +252,7 @@ class RenderMgr {
             renderData.scanning = false;
             // Retry if incomplete
             if (hasUnloadedChunks) {
-                setTimeout(() => this.scanStructure(structName), 1000);
+                setTimeout(() => this.scanStructure(structName), retryInterval);
             }
         }
     }
@@ -402,7 +400,7 @@ class RenderTool {
                  const i = start + sx * size.z + sz;
                  const { blockData } = manager.getBlockData(structName, i);
                  const pos = new IntPos(originPos.x + sx, originPos.y + sy, originPos.z + sz, originPos.dimid);
-                 if (!RenderTool.renderBlock(pos, {x: sx, y: sy, z: sz}, blockData, grids)) success = false;
+                 if (!RenderTool.renderBlock(pos, sx, sy, sz, blockData, grids)) success = false;
              }
         }
         return success;
@@ -438,7 +436,7 @@ class RenderTool {
         return success;
     }
 
-    static renderBlock(pos, localPos, expected, grids) {
+    static renderBlock(pos, x, y, z, expected, grids) {
         const block = mc.getBlock(pos);
         if (!block) return false;
         
@@ -451,8 +449,8 @@ class RenderTool {
         else if (!HelperUtils.ObjectEquals(block.getBlockState(), HelperUtils.trueToOne(expected.states))) errorState = BlockState.WrongState;
 
         for (const [state, grid] of Object.entries(grids)) {
-            if (state === errorState) grid.setTrue(localPos);
-            else grid.setFalse(localPos);
+            if (state === errorState) grid.setTrue(x, y, z);
+            else grid.setFalse(x, y, z);
         }
         return true;
     }
@@ -488,17 +486,21 @@ class FaceGrid {
         this.pos = startPos;
         this.sizeX = size.x; this.sizeY = size.y; this.sizeZ = size.z;
         
-        // 3D Grid
-        this.grid = Array.from({length: this.sizeX}, () => Array.from({length: this.sizeY}, () => new Array(this.sizeZ).fill(false)));
+        // Flattened 3D Grid: sizeX * sizeY * sizeZ
+        // Layout: x outer, y mid, z inner -> index = x * (sizeY * sizeZ) + y * sizeZ + z
+        this.grid = new Uint8Array(this.sizeX * this.sizeY * this.sizeZ);
         
-        // 6 Directions Faces
+        // 6 Directions Faces (Flattened)
+        // 0(xp), 1(xn): layer=x. Dim(z, y). Index = x*(Z*Y) + z*Y + y
+        // 2(yp), 3(yn): layer=y. Dim(x, z). Index = y*(X*Z) + x*Z + z
+        // 4(zp), 5(zn): layer=z. Dim(x, y). Index = z*(X*Y) + x*Y + y
         this.Faces = [
-            Array.from({length: this.sizeX}, () => Array.from({length: this.sizeZ}, () => new Array(this.sizeY).fill(false))), // xp
-            Array.from({length: this.sizeX}, () => Array.from({length: this.sizeZ}, () => new Array(this.sizeY).fill(false))), // xn
-            Array.from({length: this.sizeY}, () => Array.from({length: this.sizeX}, () => new Array(this.sizeZ).fill(false))), // yp
-            Array.from({length: this.sizeY}, () => Array.from({length: this.sizeX}, () => new Array(this.sizeZ).fill(false))), // yn
-            Array.from({length: this.sizeZ}, () => Array.from({length: this.sizeX}, () => new Array(this.sizeY).fill(false))), // zp
-            Array.from({length: this.sizeZ}, () => Array.from({length: this.sizeX}, () => new Array(this.sizeY).fill(false)))  // zn
+            new Uint8Array(this.sizeX * this.sizeZ * this.sizeY), // xp
+            new Uint8Array(this.sizeX * this.sizeZ * this.sizeY), // xn
+            new Uint8Array(this.sizeY * this.sizeX * this.sizeZ), // yp
+            new Uint8Array(this.sizeY * this.sizeX * this.sizeZ), // yn
+            new Uint8Array(this.sizeZ * this.sizeX * this.sizeY), // zp
+            new Uint8Array(this.sizeZ * this.sizeX * this.sizeY)  // zn
         ];
         
         this.facesGreedy = new Map(); 
@@ -511,69 +513,83 @@ class FaceGrid {
         }
     }
 
-    setTrue(pos) {
-        const {x, y, z} = pos;
-        if (this.grid[x][y][z]) return;
-        this.grid[x][y][z] = true;
+    // Helper to access flattened grid
+    _g(x, y, z) {
+        return this.grid[x * this.sizeY * this.sizeZ + y * this.sizeZ + z];
+    }
+    _sg(x, y, z, val) {
+        this.grid[x * this.sizeY * this.sizeZ + y * this.sizeZ + z] = val;
+    }
+
+    // Helpers to access flattened faces
+    _sf(face, layer, u, v, val) {
+        let idx = 0;
+        if (face < 2) idx = layer * this.sizeZ * this.sizeY + u * this.sizeY + v; // u=z, v=y
+        else if (face < 4) idx = layer * this.sizeX * this.sizeZ + u * this.sizeZ + v; // u=x, v=z
+        else idx = layer * this.sizeX * this.sizeY + u * this.sizeY + v; // u=x, v=y
+        
+        this.Faces[face][idx] = val;
+    }
+
+    setTrue(x, y, z) {
+        const idx = x * this.sizeY * this.sizeZ + y * this.sizeZ + z;
+        if (this.grid[idx]) return;
+        this.grid[idx] = 1;
 
         if (this.color === BlockState.Lost) {
-            // Blue (Lost): Render all faces independently (maintain box integrity)
-            this.Faces[0][x][z][y] = true; this.Faces[1][x][z][y] = true;
-            this.Faces[2][y][x][z] = true; this.Faces[3][y][x][z] = true;
-            this.Faces[4][z][x][y] = true; this.Faces[5][z][x][y] = true;
+            // Blue (Lost): Render all faces independently
+            // 0,1(x): layer=x, u=z, v=y
+            this._sf(0, x, z, y, 1); this._sf(1, x, z, y, 1);
+            // 2,3(y): layer=y, u=x, v=z
+            this._sf(2, y, x, z, 1); this._sf(3, y, x, z, 1);
+            // 4,5(z): layer=z, u=x, v=y
+            this._sf(4, z, x, y, 1); this._sf(5, z, x, y, 1);
             this.addDirty(x, y, z);
         } else {
-            // Others: Cull internal faces ONLY if neighbor has same color (is in same grid)
-            
-            // Check neighbors in THIS grid (same color)
-            // If neighbor exists (true), then hide shared face (cull)
-            // If neighbor empty (false), then show face
-            const xp = x >= this.sizeX - 1 || !this.grid[x+1][y][z];
-            const xn = x <= 0              || !this.grid[x-1][y][z];
-            const yp = y >= this.sizeY - 1 || !this.grid[x][y+1][z];
-            const yn = y <= 0              || !this.grid[x][y-1][z];
-            const zp = z >= this.sizeZ - 1 || !this.grid[x][y][z+1];
-            const zn = z <= 0              || !this.grid[x][y][z-1];
+            // Cull logic
+            const xp = (x >= this.sizeX - 1) || !this._g(x+1, y, z);
+            const xn = (x <= 0)              || !this._g(x-1, y, z);
+            const yp = (y >= this.sizeY - 1) || !this._g(x, y+1, z);
+            const yn = (y <= 0)              || !this._g(x, y-1, z);
+            const zp = (z >= this.sizeZ - 1) || !this._g(x, y, z+1);
+            const zn = (z <= 0)              || !this._g(x, y, z-1);
 
-            this.Faces[0][x][z][y] = xp; this.Faces[1][x][z][y] = xn;
-            this.Faces[2][y][x][z] = yp; this.Faces[3][y][x][z] = yn;
-            this.Faces[4][z][x][y] = zp; this.Faces[5][z][x][y] = zn;
+            this._sf(0, x, z, y, xp ? 1 : 0); this._sf(1, x, z, y, xn ? 1 : 0);
+            this._sf(2, y, x, z, yp ? 1 : 0); this._sf(3, y, x, z, yn ? 1 : 0);
+            this._sf(4, z, x, y, zp ? 1 : 0); this._sf(5, z, x, y, zn ? 1 : 0);
             this.addDirty(x, y, z);
 
-            // Update neighbors of SAME COLOR
-            // If I am now filled, neighbor's face looking at me should be hidden
-            if (x < this.sizeX - 1 && this.grid[x+1][y][z]) { this.Faces[1][x+1][z][y] = false; this.addDirty(x+1, y, z); }
-            if (x > 0              && this.grid[x-1][y][z]) { this.Faces[0][x-1][z][y] = false; this.addDirty(x-1, y, z); }
+            // Update neighbors
+            if (x < this.sizeX - 1 && this._g(x+1, y, z)) { this._sf(1, x+1, z, y, 0); this.addDirty(x+1, y, z); }
+            if (x > 0              && this._g(x-1, y, z)) { this._sf(0, x-1, z, y, 0); this.addDirty(x-1, y, z); }
             
-            if (y < this.sizeY - 1 && this.grid[x][y+1][z]) { this.Faces[3][y+1][x][z] = false; this.addDirty(x, y+1, z); }
-            if (y > 0              && this.grid[x][y-1][z]) { this.Faces[2][y-1][x][z] = false; this.addDirty(x, y-1, z); }
+            if (y < this.sizeY - 1 && this._g(x, y+1, z)) { this._sf(3, y+1, x, z, 0); this.addDirty(x, y+1, z); }
+            if (y > 0              && this._g(x, y-1, z)) { this._sf(2, y-1, x, z, 0); this.addDirty(x, y-1, z); }
             
-            if (z < this.sizeZ - 1 && this.grid[x][y][z+1]) { this.Faces[5][z+1][x][y] = false; this.addDirty(x, y, z+1); }
-            if (z > 0              && this.grid[x][y][z-1]) { this.Faces[4][z-1][x][y] = false; this.addDirty(x, y, z-1); }
+            if (z < this.sizeZ - 1 && this._g(x, y, z+1)) { this._sf(5, z+1, x, y, 0); this.addDirty(x, y, z+1); }
+            if (z > 0              && this._g(x, y, z-1)) { this._sf(4, z-1, x, y, 0); this.addDirty(x, y, z-1); }
         }
     }
     
-    setFalse(pos) {
-        const {x, y, z} = pos;
-        if (!this.grid[x][y][z]) return;
-        this.grid[x][y][z] = false;
+    setFalse(x, y, z) {
+        const idx = x * this.sizeY * this.sizeZ + y * this.sizeZ + z;
+        if (!this.grid[idx]) return;
+        this.grid[idx] = 0;
 
-        this.Faces[0][x][z][y] = false; this.Faces[1][x][z][y] = false;
-        this.Faces[2][y][x][z] = false; this.Faces[3][y][x][z] = false;
-        this.Faces[4][z][x][y] = false; this.Faces[5][z][x][y] = false;
+        this._sf(0, x, z, y, 0); this._sf(1, x, z, y, 0);
+        this._sf(2, y, x, z, 0); this._sf(3, y, x, z, 0);
+        this._sf(4, z, x, y, 0); this._sf(5, z, x, y, 0);
         this.addDirty(x, y, z);
 
         if (this.color !== BlockState.Lost) {
-            // Update neighbors of SAME COLOR
-            // If I am removed, neighbor's face looking at me should be likely shown (check its neighbor status? No, I am its neighbor and I am empty)
-            if (x < this.sizeX - 1 && this.grid[x+1][y][z]) { this.Faces[1][x+1][z][y] = true; this.addDirty(x+1, y, z); }
-            if (x > 0              && this.grid[x-1][y][z]) { this.Faces[0][x-1][z][y] = true; this.addDirty(x-1, y, z); }
+            if (x < this.sizeX - 1 && this._g(x+1, y, z)) { this._sf(1, x+1, z, y, 1); this.addDirty(x+1, y, z); }
+            if (x > 0              && this._g(x-1, y, z)) { this._sf(0, x-1, z, y, 1); this.addDirty(x-1, y, z); }
             
-            if (y < this.sizeY - 1 && this.grid[x][y+1][z]) { this.Faces[3][y+1][x][z] = true; this.addDirty(x, y+1, z); }
-            if (y > 0              && this.grid[x][y-1][z]) { this.Faces[2][y-1][x][z] = true; this.addDirty(x, y-1, z); }
+            if (y < this.sizeY - 1 && this._g(x, y+1, z)) { this._sf(3, y+1, x, z, 1); this.addDirty(x, y+1, z); }
+            if (y > 0              && this._g(x, y-1, z)) { this._sf(2, y-1, x, z, 1); this.addDirty(x, y-1, z); }
             
-            if (z < this.sizeZ - 1 && this.grid[x][y][z+1]) { this.Faces[5][z+1][x][y] = true; this.addDirty(x, y, z+1); }
-            if (z > 0              && this.grid[x][y][z-1]) { this.Faces[4][z-1][x][y] = true; this.addDirty(x, y, z-1); }
+            if (z < this.sizeZ - 1 && this._g(x, y, z+1)) { this._sf(5, z+1, x, y, 1); this.addDirty(x, y, z+1); }
+            if (z > 0              && this._g(x, y, z-1)) { this._sf(4, z-1, x, y, 1); this.addDirty(x, y, z-1); }
         }
     }
 
@@ -595,10 +611,24 @@ class FaceGrid {
 
     meshFace(faceStr, layer) {
         const face = Number(faceStr);
-        const faceLayer = this.Faces[face][layer];
-        const width = faceLayer.length;
-        const height = faceLayer[0].length;
-        const visited = Array.from({ length: width }, () => new Array(height).fill(false));
+        let width, height;
+        let startIndex = 0;
+
+        // Determine dims and start index based on face
+        if (face < 2) { // x
+            width = this.sizeZ; height = this.sizeY;
+            startIndex = layer * width * height; 
+        } else if (face < 4) { // y
+            width = this.sizeX; height = this.sizeZ; 
+            startIndex = layer * width * height;
+        } else { // z
+            width = this.sizeX; height = this.sizeY;
+            startIndex = layer * width * height;
+        }
+
+        const faceArr = this.Faces[face];
+        // Flattened visited array instead of 2D
+        const visited = new Uint8Array(width * height);
         
         // Clear old results for this face/layer
         const prefix = `${face},${layer}`;
@@ -609,11 +639,16 @@ class FaceGrid {
         for (let w = 0; w < width; w++) {
             let h = 0;
             while (h < height) {
-                if (visited[w][h] || !faceLayer[w][h]) { h++; continue; }
+                // Access flattened arrays
+                const cellIdx = startIndex + w * height + h;
+                const visIdx = w * height + h;
+
+                if (visited[visIdx] || !faceArr[cellIdx]) { h++; continue; }
                 
                 let maxHeight = 1;
-                for (let y = 1; y < Math.min(12, height - h); y++) { // 12 was maxSize
-                     if (!faceLayer[w][h+y]) break;
+                for (let y = 1; y < Math.min(12, height - h); y++) { 
+                     // Check next in column: w same, h increasing
+                     if (!faceArr[startIndex + w * height + (h + y)]) break;
                      maxHeight = y + 1;
                 }
                 
@@ -621,18 +656,22 @@ class FaceGrid {
                 for (let x = 1; x < Math.min(12, width - w); x++) {
                     let valid = true;
                     for (let y = h; y < h + maxHeight; y++) {
-                        if (!faceLayer[w+x][y]) { valid = false; break; }
+                        // Check next columns
+                         if (!faceArr[startIndex + (w + x) * height + y]) { valid = false; break; }
                     }
                     if (!valid) break;
                     maxWidth = x + 1;
                 }
                 
+                // Mark visited
                 for(let x = w; x < w+maxWidth; x++) {
-                    for(let y = h; y < h+maxHeight; y++) visited[x][y] = true;
+                    for(let y = h; y < h+maxHeight; y++) {
+                        visited[x * height + y] = 1;
+                    }
                 }
                 
                 this.facesGreedy.set(`${face},${layer},${w},${h}`, { w: maxWidth, h: maxHeight });
-                h += maxHeight; // Skip processed
+                h += maxHeight; 
             }
         }
     }
@@ -683,6 +722,7 @@ class FaceGrid {
         return this.particles;
     }
 }
+
 
 export class RenderMode {
     static All = 0;

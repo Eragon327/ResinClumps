@@ -21,7 +21,6 @@ class Manager {
     Event.listen(Events.MANAGER_CHANGER_ORIGIN_POS, this.#changerOriginPos.bind(this));
     Event.listen(Events.MANAGER_CHANGER_LOCK_POS, this.#changerLockPos.bind(this));
     Event.listen(Events.MANAGER_PASTE_STRUCTURE, this.#pasteStructure.bind(this));
-    Event.listen(Events.MANAGER_GET_MATERIALS, this.#getMaterials.bind(this));
   }
 
   #addStructure(filePath, originPos, structName = null) {
@@ -197,94 +196,6 @@ class Manager {
     }
     return result;
   }
-
-  async #getMaterials(structName, player) {
-    if (!this.hasStructure(structName)) {
-      Event.trigger(Events.GUI_SEND_MATERIALS, player, [], 0);
-      return;
-    }
-  
-    const pendingBlocks = new Map(); // blockName -> count
-    
-    const originPos = this.getOriginPos(structName);
-    const size = this.getSize(structName);
-    
-    const progressInterval = setInterval(() => {
-      player.sendText(`正在获取材料列表 §l${structName}`, 5);
-    }, 1000);
-  
-    let index = 0;
-    for (let y = 0; y < size.y; y++) {
-      for (let x = 0; x < size.x; x++) {
-        for (let z = 0; z < size.z; z++) {
-          const { blockData } = this.getBlockData(structName, index);
-          const targetName = blockData.name;
-          
-          // 跳过空气
-          if (targetName === "minecraft:air") {
-            index++;
-            continue;
-          }
-
-          const needFix = await Manager.#needOneBlock(
-            originPos.x + x,
-            originPos.y + y,
-            originPos.z + z,
-            originPos.dimid,
-            targetName
-          );
-          
-          if (needFix) {
-            pendingBlocks.set(targetName, (pendingBlocks.get(targetName) || 0) + 1);
-          }
-          
-          index++;
-        }
-      }
-    }
-  
-    clearInterval(progressInterval);
-  
-    // 转换为结果数组
-    const results = Array.from(pendingBlocks.entries()).map(([blockName, count]) => ({ blockName, count }));
-    
-    Event.trigger(Events.GUI_SEND_MATERIALS, player, results, manager.getAllBlocksNum(structName));
-  }
-  
-  // 核心优化：同步优先 + 无限重试
-  static #needOneBlock(bx, by, bz, dimid, expectedName) {
-    return new Promise(resolve => {
-      // 优先同步尝试
-      const block = mc.getBlock(bx, by, bz, dimid);
-      if (block) {
-        // 同步resolve, await立即继续
-        return resolve(Manager.#checkNeed(block.type, expectedName));
-      }
-      
-      // 每 50 ms 尝试获取方块状态，直到成功
-      const interval = setInterval(() => {
-        const block = mc.getBlock(bx, by, bz, dimid);
-        if (block) {
-          clearInterval(interval);
-          resolve(Manager.#checkNeed(block.type, expectedName));
-        }
-      }, 50);
-    });
-  }
-  
-  // 静态工具: 判断是否需要
-  static #checkNeed(actualType, expectedName) {
-    // 气泡柱视为水
-    if (actualType === 'minecraft:bubble_column') actualType = 'minecraft:water';
-    
-    // 流动液体不计入材料
-    if (actualType.includes('flowing_')) return false;
-    
-    // 此处做了多功能, 可读性稍差
-    return actualType !== expectedName;
-  }
-
-  // TODO: 材料列表放到 Render 模块, 只获取当前渲染模式下的材料需求
 
   hasStructure(structName) {
     return this.cache.has(structName);

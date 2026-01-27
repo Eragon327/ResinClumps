@@ -255,9 +255,11 @@ class GUI {
     if(newLayerIndex > max) newLayerIndex = max;
     if(newLayerIndex < 0) newLayerIndex = 0;
     const oldLayerIndex = Render.getLayerIndex(structName);
+    let layerChanged = false;
     if (newLayerIndex !== oldLayerIndex) {
       Event.trigger(Events.RENDER_SET_LAYER_INDEX, newLayerIndex, structName);
       Event.trigger(Events.RENDER_UPDATE_DATA);
+      layerChanged = true;
     }
 
     Event.trigger(Events.RENDER_REFRESH_GRIDS, structName);
@@ -281,28 +283,9 @@ class GUI {
     results.sort((a, b) => b.count - a.count);
 
     let currentCount = 0;
-    for (const item of results) {
-      let count = item.count;
-      currentCount += count;
-      content += `\n${HelperUtils.trBlock(item.blockName)} : ${count}`; // 就是这个翻译把服务器卡爆了
-      if (count >= 1728) {
-        content += ` = ${Math.floor(count / 1728)} 盒`;
-        count = count % 1728;
-        if (count >= 64) {
-          content += ` + ${Math.floor(count / 64)} 组`;
-          count = count % 64;
-        } else if (count > 0) {
-          content += ` + ${count} 个`;
-        }
-      } else if (count >= 64) {
-        content += ` = ${Math.floor(count / 64)} 组`;
-        count = count % 64;
-        if (count > 0) {
-          content += ` + ${count} 个`;
-        }
-      }
-    }
-    content += `\n总计 ${currentCount} / ${allCount} 个方块, 完成度: ${((1 - currentCount / allCount) * 100).toFixed(2)}%%`;  // 两个 % 才能显示一个
+
+    content += HelperUtils.trBlocks(results,content,currentCount,allCount)
+
     form.setContent(content);
     form.addButton("复制到剪贴板");
     player.sendForm(form, (player, id) => {

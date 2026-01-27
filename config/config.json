@@ -3,6 +3,7 @@
     "renderSpeed": 3000,
     "displayRadius": 70,
     "displayInterval": 50,
+    "retryInterval": 5000,
     "placeDistance": 5,
     "placeInterval": 1,
     "particleLifetime": 1550,

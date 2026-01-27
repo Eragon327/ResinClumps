@@ -7,6 +7,23 @@ export class Structure {
     const comp = NBT.parseBinaryNBT(nbt);
     const struct = JSON.parse(comp.toString()); // 旧版本 LSE 的 toObject() 有 Bug
     // const struct = comp.toObject();          // 新版本 LSE 的 toObject() 已修复该 Bug
+
+    // 内存优化: 移除无关数据
+    if (struct.structure) {
+        delete struct.structure.entities; 
+        const palette = struct.structure.palette?.default;
+        if (palette) {
+             delete palette.block_position_data; 
+             if (palette.block_palette) {
+                 for (let i = 0; i < palette.block_palette.length; i++) {
+                     const p = palette.block_palette[i];
+                     // 只保留 name 和 states, 丢弃 version
+                     palette.block_palette[i] = { name: p.name, states: p.states || {} };
+                 }
+             }
+        }
+    }
+
     xyz_to_yxz(struct);
     // keepPaletteNbt(struct, comp); // 已弃用该功能
     pickleRemoveWater(struct);
@@ -23,8 +40,9 @@ function xyz_to_yxz(struct) {
   const block_indices = struct.structure.block_indices[0];
   const isWaterLogged = struct.structure.block_indices[1];
 
-  const new_block_indices = new Array(block_indices.length);
-  const new_isWaterLogged = new Array(isWaterLogged.length);
+  // 优化: 使用 TypedArray 代替普通 Array 存储方块索引，能大幅降低内存占用
+  const new_block_indices = new Int32Array(block_indices.length);
+  const new_isWaterLogged = new Int32Array(isWaterLogged.length);
 
   let old_index = 0;
   for (let x = 0; x < size[0]; x++) {
