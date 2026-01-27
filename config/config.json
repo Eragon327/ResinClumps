@@ -73,5 +73,5 @@
         "minecraft:red_bed",
         "minecraft:black_bed"
     ],
-    "rankAdaption": true
+    "rankAdaption": false
 }
