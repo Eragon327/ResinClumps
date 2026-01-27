@@ -101,12 +101,11 @@ export class HelperUtils {  // 全静态类
   }
 
   static dims = ['主世界', '下界', '末地'];
+  
+  static zh_CN = new JsonConfigFile("./plugins/ResinClumps/scr/lang/zh_CN.json", '{}');
 
   static trBlock(enName) {
-    if (!File.exists("./plugins/ResinClumps/scr/lang/zh_CN.json")) return enName;
-    const zh_CN = new JsonConfigFile("./plugins/ResinClumps/scr/lang/zh_CN.json", '{}');
-    zh_CN.close();
-    return zh_CN.get(`${enName}`, enName);
+    return HelperUtils.zh_CN.get(`${enName}`, enName);
   }
 
   static simplifyBlockName(enName) {

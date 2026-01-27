@@ -255,11 +255,9 @@ class GUI {
     if(newLayerIndex > max) newLayerIndex = max;
     if(newLayerIndex < 0) newLayerIndex = 0;
     const oldLayerIndex = Render.getLayerIndex(structName);
-    let layerChanged = false;
     if (newLayerIndex !== oldLayerIndex) {
       Event.trigger(Events.RENDER_SET_LAYER_INDEX, newLayerIndex, structName);
       Event.trigger(Events.RENDER_UPDATE_DATA);
-      layerChanged = true;
     }
 
     Event.trigger(Events.RENDER_REFRESH_GRIDS, structName);

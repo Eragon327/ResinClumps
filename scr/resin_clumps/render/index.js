@@ -247,7 +247,7 @@ class RenderMgr {
 
             if (renderData.mode === RenderMode.All) {
                 logger.info(`原理图: ${structName} 全量更新完成! 粒子数: ${this.getParticleCount(structName)}`);
-                mc.broadcast(`[ResinClumps] 原理图 §l${structName} §r全量更新完成! 粒子数: §l${this.getParticleCount(structName)}`);
+                // mc.broadcast(`[ResinClumps] 原理图 §l${structName} §r全量更新完成! 粒子数: §l${this.getParticleCount(structName)}`);
             }
 
         } finally {
@@ -290,7 +290,7 @@ class RenderMgr {
     getMaterials(structName, player, mode = null) {
         if (!manager.hasStructure(structName)) return;
 
-        logger.info(`玩家 ${player.name} 请求获取原理图 ${structName} 的材料列表`);
+        // logger.info(`玩家 ${player.name} 请求获取原理图 ${structName} 的材料列表`);
         this.getMaterialsAsync(structName, player, mode);
     }
     
