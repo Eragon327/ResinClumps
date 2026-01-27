@@ -17,13 +17,9 @@ export class EasyPlace {
 
   static run() {
     for (const player of mc.getOnlinePlayers()) {
-      if (player.hasTag('LitematicaToolOn') &&
+      if (Wand.getMode(player) === WandMode.EasyPlacing &&
         player.getHand().type === "minecraft:fishing_rod") {
-        try {
-          if (Wand.getMode(player) === WandMode.EasyPlacing) {
-            EasyPlace.#doEasyPlace(player);
-          }
-        } catch (e) {
+        try { EasyPlace.#doEasyPlace(player); } catch (e) {
           logger.error(`Error in EasyPlace for player ${player.name}: ${e}`);
         }
       }

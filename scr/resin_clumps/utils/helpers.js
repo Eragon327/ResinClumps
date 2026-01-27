@@ -108,4 +108,20 @@ export class HelperUtils {  // 全静态类
     zh_CN.close();
     return zh_CN.get(`${enName}`, enName);
   }
+
+  static simplifyBlockName(enName) {
+    // 去除方块名称中的前缀
+    let simpleName = enName;
+    const directionSuffixes = [
+      'unlit_', // 长的放在前面避免漏删
+      'lit_',
+      'unpowered_',
+      'powered_',
+      'minecraft:'
+    ];
+    for (const suffix of directionSuffixes) {
+      simpleName = simpleName.replace(suffix, '');
+    }
+    return simpleName;
+  }
 }

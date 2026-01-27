@@ -50,7 +50,8 @@ export class Command {
     result = Object.values(result);
     if (!result.length) {
       if (origin.player) {
-        Event.trigger(Events.GUI_SEND_MAIN_FORM, origin.player);
+        const player = origin.player;
+        setTimeout(() => { Event.trigger(Events.GUI_SEND_MAIN_FORM, player); }, 1);
       }
     } else {
       try {

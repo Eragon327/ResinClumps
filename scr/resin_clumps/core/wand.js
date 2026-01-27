@@ -10,11 +10,11 @@ class WandMgr {
   }
 
   getMode(player) {
-    return this.playerDatas.get(player.uuid).mode;
+    return this.playerDatas.get(player.uuid)?.mode;
   }
 
   getControlingStruct(player) {
-    return this.playerDatas.get(player.uuid).controlingStruct;
+    return this.playerDatas.get(player.uuid)?.controlingStruct;
   }
 
   init() {

@@ -6,7 +6,12 @@ const configFile = new JsonConfigFile("./plugins/ResinClumps/config/config.json"
 const displayRadius = configFile.get("displayRadius", 70);
 const particleLifetime = configFile.get("particleLifetime", 1550);
 const blacklist = configFile.get('BlackList', []);
+const scanSpeed = configFile.get("scanSpeed", 3000);
+const renderSpeed = configFile.get("renderSpeed", 3000);
+const displayInterval = configFile.get("displayInterval", 50);
 configFile.close();
+
+const shortTime = 50;  // 渲染循环与粒子生命周期的时间差, 确保粒子不会闪烁
 
 class RenderMgr {
     constructor() {
@@ -56,6 +61,7 @@ class RenderMgr {
 
         // Start render loop
         this.loop();
+        setInterval(this.loop.bind(this), particleLifetime - shortTime);
     }
 
     getMode(structName) {
@@ -136,7 +142,7 @@ class RenderMgr {
     refresh(arg1 = null, arg2 = null) {
         if (typeof arg1 === 'string') {
             const structName = arg1;
-            if (arg2 && typeof arg2 === 'object') {
+            if (arg2 && typeof arg2 === 'object' && 'x' in arg2 && 'y' in arg2 && 'z' in arg2) {
                 // Single Block Refresh (specified structure)
                 this.scanBlock(structName, arg2);
             } else {
@@ -192,6 +198,8 @@ class RenderMgr {
         const renderData = this.renders.get(structName);
         if (!renderData || renderData.scanning) return;
         
+        this.interrupt = false;
+
         if (renderData.mode === RenderMode.Off) {
             renderData.particles = [];
             return;
@@ -200,10 +208,17 @@ class RenderMgr {
         renderData.scanning = true;
         let hasUnloadedChunks = false;
         
+        if (renderData.mode === RenderMode.All) {
+            logger.warn(`开始对原理图: ${structName} 进行全量更新...`);
+            mc.broadcast(`§e[ResinClumps] 开始对原理图 §l${structName} §r§e进行全量更新...`, false);
+        }
+
         try {
             // Re-create grids to clear old particles (e.g. from previous layer)
             const originPos = manager.getOriginPos(structName);
             const size = manager.getSize(structName);
+            RenderTool.resetCounter();
+            
             const grids = {};
             for (const color of Object.values(BlockState)) {
                 grids[color] = new FaceGrid(originPos, size, color);
@@ -229,6 +244,12 @@ class RenderMgr {
             if (result === false) hasUnloadedChunks = true;
 
             this.commitParticles(renderData);
+
+            if (renderData.mode === RenderMode.All) {
+                logger.info(`原理图: ${structName} 全量更新完成! 粒子数: ${this.getParticleCount(structName)}`);
+                mc.broadcast(`[ResinClumps] 原理图 §l${structName} §r全量更新完成! 粒子数: §l${this.getParticleCount(structName)}`);
+            }
+
         } finally {
             renderData.scanning = false;
             // Retry if incomplete
@@ -249,41 +270,35 @@ class RenderMgr {
     }
 
     async loop() {
-        const start = Date.now();
-        let hasActive = false;
+        let spawnedCount = 0;
 
         for (const renderData of this.renders.values()) {
             if (renderData.mode === RenderMode.Off) continue;
-            if (renderData.particles.length > 0) hasActive = true;
             
             for (const p of renderData.particles) {
                 this.ps.spawnParticle(p.pos, p.identifier);
+                
+                spawnedCount++;
+                if (spawnedCount >= renderSpeed) {
+                    spawnedCount = 0;
+                    await new Promise(resolve => setTimeout(resolve, displayInterval));
+                }
             }
-        }
-
-        const end = Date.now();
-        const elapsed = end - start;
-        let delay = particleLifetime - elapsed;
-        if (delay < 50) delay = 50;
-        
-        // Keep loop running
-        if (!hasActive) {
-            setTimeout(this.loop.bind(this), 1000); 
-        } else {
-            setTimeout(this.loop.bind(this), delay);
         }
     }
 
-    async getMaterials(structName, player) {
-        if (!manager.hasStructure(structName)) {
-            Event.trigger(Events.GUI_SEND_MATERIALS, player, [], 0);
-            return;
-        }
+    getMaterials(structName, player, mode = null) {
+        if (!manager.hasStructure(structName)) return;
 
+        logger.info(`玩家 ${player.name} 请求获取原理图 ${structName} 的材料列表`);
+        this.getMaterialsAsync(structName, player, mode);
+    }
+    
+    async getMaterialsAsync(structName, player, mode = null) {
         const renderData = this.renders.get(structName);
         if (!renderData) return;
 
-        const mode = renderData.mode;
+        mode = mode !== null ? mode : renderData.mode;
         const layerIndex = renderData.layerIndex;
         const size = manager.getSize(structName);
         const originPos = manager.getOriginPos(structName);
@@ -301,6 +316,7 @@ class RenderMgr {
         
         yMin = Math.max(0, yMin);
         yMax = Math.min(size.y, yMax);
+        RenderTool.resetCounter();
 
         const pendingBlocks = new Map();
         let totalBlocksInView = 0;
@@ -311,9 +327,9 @@ class RenderMgr {
         }, 1000);
 
         for (let y = yMin; y < yMax; y++) {
-            await RenderTool.checkYield();
             for (let x = 0; x < size.x; x++) {
                 for (let z = 0; z < size.z; z++) {
+                     await RenderTool.checkYield();
                      const { blockData } = manager.getBlockData(structName, { x, y, z });
                      if (blacklist.includes(blockData.name)) continue;
                      
@@ -325,25 +341,37 @@ class RenderMgr {
                          originPos.x + x, originPos.y + y, originPos.z + z, originPos.dimid, name
                      );
                      
-                     if (need) pendingBlocks.set(name, (pendingBlocks.get(name) || 0) + 1);
+                    if (need) {
+                        // 先走一轮方块名字预处理
+                        const name1 = HelperUtils.simplifyBlockName(name);
+                        pendingBlocks.set(name1, (pendingBlocks.get(name1) || 0) + 1);
+                    }
                 }
             }
         }
 
         clearInterval(progressTimer);
         const results = Array.from(pendingBlocks.entries()).map(([blockName, count]) => ({ blockName, count }));
-        Event.trigger(Events.GUI_SEND_MATERIALS, player, results, totalBlocksInView);
+        setTimeout(() => { Event.trigger(Events.GUI_SEND_MATERIALS, player, structName, results, totalBlocksInView); }, 1);
+    }
+    getParticleCount(structName) {
+        if (!this.renders.has(structName)) return 0;
+        return this.renders.get(structName).particles.length;
     }
 }
 
 class RenderTool {
-    static startTime = 0;
-    static MAX_EXECUTION_TIME_MS = 20;
+    static processedCount = 0;
+
+    static resetCounter() {
+        RenderTool.processedCount = 0;
+    }
 
     static async checkYield() {
-        if (Date.now() - RenderTool.startTime > RenderTool.MAX_EXECUTION_TIME_MS) {
-            await new Promise(resolve => setTimeout(resolve, 10));
-            RenderTool.startTime = Date.now();
+        RenderTool.processedCount++;
+        if (RenderTool.processedCount >= scanSpeed) {
+            RenderTool.processedCount = 0;
+            await new Promise(resolve => setTimeout(resolve, displayInterval));
         }
     }
 
@@ -362,7 +390,6 @@ class RenderTool {
     static async renderPlane(structName, sy, grids) {
         const size = manager.getSize(structName);
         if (!size) return true;
-        await RenderTool.checkYield();
         
         const originPos = manager.getOriginPos(structName);
         const start = sy * size.x * size.z;
@@ -371,6 +398,7 @@ class RenderTool {
         // To avoid excessive helper calls, iterating directly
         for (let sx = 0; sx < size.x; sx++) {
              for (let sz = 0; sz < size.z; sz++) {
+                 await RenderTool.checkYield();
                  const i = start + sx * size.z + sz;
                  const { blockData } = manager.getBlockData(structName, i);
                  const pos = new IntPos(originPos.x + sx, originPos.y + sy, originPos.z + sz, originPos.dimid);
@@ -665,12 +693,12 @@ export class RenderMode {
     static modes_zh = ["全部", "单层", "此层之下", "此层之上", "关闭"];
 }
 
-class BlockState {
-    static Lost = 'b';
-    static WrongType = 'r';
-    static WrongState = 'rg';
-    static Extra = 'rb';
-}
+const BlockState = {
+    Lost: 'b',
+    WrongType: 'r',
+    WrongState: 'rg',
+    Extra: 'rb'
+};
 
 export const Render = new RenderMgr();
 
@@ -678,5 +706,4 @@ export function RenderInit() {
   if (typeof Event === 'undefined') throw new Error("Event module is required.");
   Render.init();
   
-  logger.info("All grids scanned.");
 }

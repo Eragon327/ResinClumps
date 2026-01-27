@@ -19,20 +19,22 @@ class GUI {
 
   static #mainFormCallback(player, id) {
     if (id === undefined) return;
-    switch (id) {
-      case 0:
-        GUI.#sendModeChangeForm(player);
-        break;
-      case 1:
-        GUI.#sendLoadStructureForm(player);
-        break;
-      case 2:
-        GUI.#sendLoadedStructureForm(player);
-        break;
-      case 3:
-        GUI.#sendOptionsForm(player);
-        break;
-    }
+    setTimeout(() => {
+      switch (id) {
+        case 0:
+          GUI.#sendModeChangeForm(player);
+          break;
+        case 1:
+          GUI.#sendLoadStructureForm(player);
+          break;
+        case 2:
+          GUI.#sendLoadedStructureForm(player);
+          break;
+        case 3:
+          GUI.#sendOptionsForm(player);
+          break;
+      }
+    }, 1);  // 延时执行以防止表单嵌套导致的问题
   }
 
   static #sendModeChangeForm(player) {
@@ -68,7 +70,7 @@ class GUI {
   static #loadStructureFormCallback(player, id) {
     if (id === undefined) return;
     if (id === manager.getAllFileStructureNames().length) {
-      GUI.sendMainForm(player);
+      setTimeout(() => { GUI.sendMainForm(player); }, 1);
       return;
     }
     const name = manager.getAllFileStructureNames()[id];
@@ -114,11 +116,11 @@ class GUI {
   static #loadedStructureFormCallback(player, id) {
     if (id === undefined) return;
     if (id === manager.cache.size) {
-      GUI.sendMainForm(player);
+      setTimeout(() => { GUI.sendMainForm(player); }, 1);
       return;
     }
     const structName = Array.from(manager.getAllStructureNames())[id];
-    GUI.#sendStructureOptionsForm(player, structName);
+    setTimeout(() => { GUI.#sendStructureOptionsForm(player, structName); }, 1);
   }
 
   static #sendStructureOptionsForm(player, structName) {
@@ -126,8 +128,19 @@ class GUI {
     form.setTitle(`原理图 ${structName} 设置`);
     const originPos = manager.getOriginPos(structName);
     form.setContent(`请选择操作: \n原理图位置: ${HelperUtils.dims[originPos.dimid]} (${originPos.x}, ${originPos.y}, ${originPos.z})`);
-    let buttons = ["渲染设置", "材料列表", "定位到玩家"];
-    form.addButton("渲染设置").addButton("材料列表").addButton("定位到玩家");
+    let buttons = ["渲染设置"];
+    form.addButton("渲染设置");
+    const mode = Render.getMode(structName);
+    if (mode !== RenderMode.Off) {
+      form.addButton("材料列表");
+      buttons.push("材料列表");
+    }
+    if (Render.getMode(structName) !== RenderMode.All && Render.getMode(structName) !== RenderMode.Off) {
+      form.addButton("材料列表(全部)");
+      buttons.push("材料列表全部");
+    }
+    form.addButton("定位到玩家");
+    buttons.push("定位到玩家");
     if (structName !== Wand.getControlingStruct(player)) {
       form.addButton("设置为主控原理图");
       buttons.push("设置为主控");
@@ -148,7 +161,7 @@ class GUI {
     if (id === undefined) return;
     switch (buttons[id]) {
       case "渲染设置":
-        GUI.#sendStructureRenderForm(player, structName);
+        setTimeout(() => { GUI.#sendStructureRenderForm(player, structName); }, 1);
         break;
       case "定位到玩家":
         if (manager.isLockedPos(structName)) {
@@ -167,7 +180,6 @@ class GUI {
         break;
       case "设置为主控":
         Event.trigger(Events.WAND_CHANGE_CONTROLING_STRUCT, player, structName);
-        Event.trigger(Events.WAND_CHANGE_MODE, player, WandMode.Placing);
         Event.trigger(Events.WAND_UPDATE_DATA, player);
         player.sendText(`已设置 §l${structName} §r为主控原理图`, 5);
         break;
@@ -181,7 +193,7 @@ class GUI {
         Event.trigger(Events.RENDER_REFRESH_GRIDS, structName);
         player.sendText(`原理图 §l${structName} §r已移除`, 5);
         if (manager.cache.size > 0) {
-          GUI.#sendLoadedStructureForm(player);
+          setTimeout(() => { GUI.#sendLoadedStructureForm(player); }, 1);
         }
         break;
       case "创造放置":
@@ -191,12 +203,15 @@ class GUI {
       case "材料列表":
         Event.trigger(Events.RENDER_GET_MATERIALS, structName, player);
         break;
+      case "材料列表全部":
+        Event.trigger(Events.RENDER_GET_MATERIALS, structName, player, RenderMode.All);
+        break;
       case "锁定原理图":
         Event.trigger(Events.MANAGER_CHANGER_LOCK_POS, structName, !manager.isLockedPos(structName));
         Event.trigger(Events.MANAGER_UPDATE_DATA);
         break;
       case "返回":
-        GUI.#sendLoadedStructureForm(player);
+        setTimeout(() => { GUI.#sendLoadedStructureForm(player); }, 1);
         return;
     }
   }
@@ -230,12 +245,12 @@ class GUI {
 
       modeChanged = true;
       if (newRenderMode !== RenderMode.All && newRenderMode !== RenderMode.Off) {
-        GUI.#sendStructureRenderForm(player, structName);
+        setTimeout(() => { GUI.#sendStructureRenderForm(player, structName); }, 1);
       }
     }
 
     let newLayerIndex = Number(data[1]) - 1; // string --> number --> 显示给用户时高度 +1, 所以这里要 -1
-    if (Number.isNaN(newLayerIndex)) return;
+    if (data[1] !== null && Number.isNaN(newLayerIndex)) return;
     const max = manager.getSize(structName).y;
     if(newLayerIndex > max) newLayerIndex = max;
     if(newLayerIndex < 0) newLayerIndex = 0;
@@ -247,8 +262,7 @@ class GUI {
       layerChanged = true;
     }
 
-    const forceReset = modeChanged || layerChanged;
-    Event.trigger(Events.RENDER_REFRESH_GRIDS, structName, forceReset);
+    Event.trigger(Events.RENDER_REFRESH_GRIDS, structName);
   }
     
   static #sendOptionsForm(player) {
@@ -262,16 +276,17 @@ class GUI {
     if (data === undefined) return;
   }
 
-  static sendMaterialsForm(player, results, allCount) {
+  static sendMaterialsForm(player, structName, results, allCount) {
     const form = mc.newSimpleForm();
     form.setTitle("材料列表");
-    let content = "以下是所需材料:";
+    let content = `以下是原理图 ${structName} 所需材料:`;
     results.sort((a, b) => b.count - a.count);
+
     let currentCount = 0;
     for (const item of results) {
       let count = item.count;
       currentCount += count;
-      content += `\n${HelperUtils.trBlock(item.blockName.replace('minecraft:', ''))}§r : ${count}`;
+      content += `\n${HelperUtils.trBlock(item.blockName)} : ${count}`; // 就是这个翻译把服务器卡爆了
       if (count >= 1728) {
         content += ` = ${Math.floor(count / 1728)} 盒`;
         count = count % 1728;
@@ -291,10 +306,22 @@ class GUI {
     }
     content += `\n总计 ${currentCount} / ${allCount} 个方块, 完成度: ${((1 - currentCount / allCount) * 100).toFixed(2)}%%`;  // 两个 % 才能显示一个
     form.setContent(content);
-    form.addButton("<<");
+    form.addButton("复制到剪贴板");
     player.sendForm(form, (player, id) => {
       if (id === undefined) return;
-      GUI.#sendLoadedStructureForm(player);
+      if (id === 0) {
+        setTimeout(() => { GUI.sendMaterialsCopyForm(player, structName, content); }, 1);
+      }
+    });
+  }
+
+  static sendMaterialsCopyForm(player, structName, content) {
+    const form = mc.newCustomForm();
+    form.setTitle("材料列表");
+    form.addInput("请手动复制以下内容到剪贴板:", "", content);
+    form.setSubmitButton("<<");
+    player.sendForm(form, () => {
+      setTimeout(() => { GUI.#sendStructureOptionsForm(player, structName); }, 1);
     });
   }
 }

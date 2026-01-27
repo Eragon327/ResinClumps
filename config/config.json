@@ -1,6 +1,9 @@
 {
-    "placeDistance": 5,
+    "scanSpeed": 3000,
+    "renderSpeed": 3000,
     "displayRadius": 70,
+    "displayInterval": 50,
+    "placeDistance": 5,
     "placeInterval": 1,
     "particleLifetime": 1550,
     "maxPasteSpeed": 65535,
