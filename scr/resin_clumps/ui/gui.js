@@ -3,6 +3,7 @@ import { Wand, WandMode } from "../core/wand.js";
 import { manager } from "../core/manager.js";
 import { Render, RenderMode } from "../render/index.js";
 import { HelperUtils } from "../utils/helpers.js";
+import { EasyPlace, PlaceMode } from "../scripts/easyplace.js";
 
 class GUI {
   static sendMainForm(player) {
@@ -266,14 +267,38 @@ class GUI {
   }
     
   static #sendOptionsForm(player) {
-    const form = mc.newCustomForm();
+    const form = mc.newSimpleForm();
     form.setTitle("ResinClumps 配置");
-    form.setSubmitButton("确定");
+    form.setContent("请选择要配置的选项: ");
+    form.addButton("轻松放置设置");
+    form.addButton("<<");
     player.sendForm(form, GUI.#optionsFormCallback);
   }
 
-  static #optionsFormCallback(player, data) {
+  static #optionsFormCallback(player, id) {
+    if (id === undefined) return;
+    switch (id) {
+      case 0:
+        setTimeout(() => { GUI.#sendEasyPlaceOptionsForm(player); }, 1);
+        break;
+      case 1:
+        setTimeout(() => { GUI.sendMainForm(player); }, 1);
+        break;
+    }
+  }
+
+  static #sendEasyPlaceOptionsForm(player) {
+    const form = mc.newCustomForm();
+    form.setTitle("轻松放置 设置");
+    form.addStepSlider("放置模式", PlaceMode.modes_zh, EasyPlace.placeMode);
+    form.setSubmitButton("确定");
+    player.sendForm(form, GUI.#easyPlaceOptionsFormCallback);
+  }
+
+  static #easyPlaceOptionsFormCallback(_player, data) {
     if (data === undefined) return;
+    const newMode = data[0];
+    Event.trigger(Events.EASYPLACE_CHANGE_PLACE_MODE, newMode)
   }
 
   static sendMaterialsForm(player, structName, results, allCount) {

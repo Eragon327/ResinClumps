@@ -2,6 +2,7 @@
     "scanSpeed": 3000,
     "renderSpeed": 3000,
     "displayRadius": 70,
+    "maxGreedySize": 12,
     "displayInterval": 50,
     "retryInterval": 5000,
     "placeDistance": 5,
@@ -77,5 +78,6 @@
         "minecraft:red_bed",
         "minecraft:black_bed"
     ],
-    "rankAdaption": false
+    "rankAdaption": false,
+    "EasyPlaceMode": 1
 }

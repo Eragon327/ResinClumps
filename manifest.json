@@ -1,8 +1,8 @@
 {
-  "entry": "scr/resin_clumps/core/main.js",
+  "entry": "src/resin_clumps/core/main.js",
   "name": "ResinClumps",
   "type": "lse-quickjs",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "dependencies": [
       {
           "name": "legacy-script-engine-quickjs"

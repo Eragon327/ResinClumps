@@ -10,6 +10,7 @@ const scanSpeed = configFile.get("scanSpeed", 3000);
 const renderSpeed = configFile.get("renderSpeed", 3000);
 const displayInterval = configFile.get("displayInterval", 50);
 const retryInterval = configFile.get("retryInterval", 5000);
+const maxGreedySize = configFile.get("maxGreedySize", 12);
 configFile.close();
 
 const shortTime = 50;  // 渲染循环与粒子生命周期的时间差, 确保粒子不会闪烁
@@ -19,6 +20,8 @@ class RenderMgr {
         this.renders = new Map(); // structName -> { mode, layerIndex, particles: [], grids: {} }
         this.interrupt = false;
         this.ps = new ParticleSpawner(displayRadius, false, false);
+        this.pendingUpdates = new Set();
+        this.updateTimer = null;
     }
 
     init() {
@@ -185,10 +188,11 @@ class RenderMgr {
              if (mode === RenderMode.BelowLayer && ly > layerIndex) return;
              if (mode === RenderMode.AboveLayer && ly < layerIndex) return;
 
+             const { blockData } = manager.getBlockData(structName, { x: lx, y: ly, z: lz });
              const blockPos = new IntPos(origin.x + lx, origin.y + ly, origin.z + lz, origin.dimid);
              
              RenderTool.renderBlock(blockPos, lx, ly, lz, blockData, renderData.grids);
-             this.commitParticles(renderData);
+             this.scheduleUpdate(structName);
         }
     }
 
@@ -265,6 +269,26 @@ class RenderMgr {
             for(const p of parts) newParticles.push(p);
         }
         renderData.particles = newParticles;
+    }
+
+    scheduleUpdate(structName) {
+        this.pendingUpdates.add(structName);
+        if (this.updateTimer) return;
+        
+        this.updateTimer = setTimeout(() => {
+            this.processPendingUpdates();
+        }, 50);
+    }
+
+    processPendingUpdates() {
+        this.updateTimer = null;
+        for (const structName of this.pendingUpdates) {
+            const renderData = this.renders.get(structName);
+            if (renderData && !renderData.scanning) {
+                this.commitParticles(renderData);
+            }
+        }
+        this.pendingUpdates.clear();
     }
 
     async loop() {
@@ -646,14 +670,14 @@ class FaceGrid {
                 if (visited[visIdx] || !faceArr[cellIdx]) { h++; continue; }
                 
                 let maxHeight = 1;
-                for (let y = 1; y < Math.min(12, height - h); y++) { 
+                for (let y = 1; y < Math.min(maxGreedySize, height - h); y++) { 
                      // Check next in column: w same, h increasing
                      if (!faceArr[startIndex + w * height + (h + y)]) break;
                      maxHeight = y + 1;
                 }
                 
                 let maxWidth = 1;
-                for (let x = 1; x < Math.min(12, width - w); x++) {
+                for (let x = 1; x < Math.min(maxGreedySize, width - w); x++) {
                     let valid = true;
                     for (let y = h; y < h + maxHeight; y++) {
                         // Check next columns
