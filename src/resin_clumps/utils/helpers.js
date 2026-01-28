@@ -104,8 +104,8 @@ export class HelperUtils {  // 全静态类
   static dims = ['主世界', '下界', '末地'];
 
   static trBlocks(results, content, currentCount, allCount) {// 全物品 ≈0.01s
-    if (!File.exists("./plugins/ResinClumps/scr/lang/zh_CN.json")) {//使用blockName
-      logger.error("./plugins/ResinClumps/scr/lang/zh_CN.json翻译文件缺失,使用blockName");
+    if (!File.exists("./plugins/ResinClumps/src/lang/zh_CN.json")) {//使用blockName
+      logger.error("./plugins/ResinClumps/src/lang/zh_CN.json翻译文件缺失,使用blockName");
 
       for (const item of results) {// 我不想再抽象一层
         let count = item.count;
@@ -129,7 +129,7 @@ export class HelperUtils {  // 全静态类
         }
       }
     } else {
-      const zh_CN2 = new JsonConfigFile("./plugins/ResinClumps/scr/lang/zh_CN.json", '{}');
+      const zh_CN2 = new JsonConfigFile("./plugins/ResinClumps/src/lang/zh_CN.json", '{}');
 
       for (const item of results) {
         let count = item.count;
