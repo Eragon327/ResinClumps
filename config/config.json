@@ -7,6 +7,7 @@
     "retryInterval": 15000,
     "placeDistance": 5,
     "placeInterval": 1,
+    "EasyPlaceMode": 0,
     "particleLifetime": 1550,
     "maxPasteSpeed": 65535,
     "BlackList": [
@@ -78,6 +79,5 @@
         "minecraft:red_bed",
         "minecraft:black_bed"
     ],
-    "rankAdaption": false,
-    "EasyPlaceMode": 0
+    "rankAdaption": false
 }
