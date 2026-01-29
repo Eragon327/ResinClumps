@@ -108,7 +108,7 @@ class EasyPlaceMgr {
       sx >= size.x || sy >= size.y || sz >= size.z)
       return false;
     
-    const { blockData, isWaterLogged } = manager.getBlockData(name, { x: sx, y: sy, z: sz });
+    const blockData = manager.getBlockData(name, { x: sx, y: sy, z: sz });
     if (!blockData) return false;
 
     if (blockData.name === "minecraft:air" ||
@@ -119,7 +119,7 @@ class EasyPlaceMgr {
       !Container.hasBlockItem(player, blockData.name))
       return false;
     
-    mc.setBlock(bx, by, bz, dimid, Nbt.ObjectToNbt(blockData));
+    mc.setBlock(bx, by, bz, dimid, blockData.nbt);
 
     // Event.trigger(Events.RENDER_REFRESH_GRIDS, name, {x: bx, y: by, z: bz});
 
@@ -137,9 +137,10 @@ class EasyPlaceMgr {
   }
 
   static getCount(blockData) {
+    const nbtObj = Nbt.NbtToObject(blockData.nbt);
 
     if (blockData.name.endsWith("minecraft:candle")) {  // 17色蜡烛
-      return blockData.states.candles;
+      return nbtObj.states.candles;
     }
 
     if (["minecraft:wildflowers",
@@ -147,20 +148,20 @@ class EasyPlaceMgr {
       "minecraft:leaf_litter",
     ].includes(blockData.name)
     ) {  // 野花簇, 粉红色花簇, 枯叶堆
-      return blockData.states.growth + 1;
+      return nbtObj.states.growth + 1;
     }
 
     if (blockData.name === "minecraft:sea_pickle") {   // 海泡菜
-      return blockData.states.cluster_count + 1;
+      return nbtObj.states.cluster_count + 1;
     }
 
     if (blockData.name === "minecraft:turtle_egg") {   // 海龟蛋
-      return HelperUtils.enToNumber(blockData.states.turtle_egg_count);
+      return HelperUtils.enToNumber(nbtObj.states.turtle_egg_count);
     }
 
     if(["minecraft:glow_lichen",
       "minecraft:sculk_vein"].includes(blockData.name)) {   // 发光地衣 & 幽匿脉络
-      return HelperUtils.countOnes(blockData.states.multi_face_direction_bits);
+      return HelperUtils.countOnes(nbtObj.states.multi_face_direction_bits);
     }
 
     return 1;

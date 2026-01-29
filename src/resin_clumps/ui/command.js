@@ -1,6 +1,7 @@
 import { Event, Events } from "../core/event.js";
 import { manager } from "../core/manager.js";
 import { Wand, WandMode } from "../core/wand.js";
+import { HelperUtils } from "../utils/helpers.js";
 
 export class Command {
   static register() {
@@ -18,10 +19,12 @@ export class Command {
 
     // 加载原理图
     rc.setEnum("load", ["load"]);
+    rc.setEnum("dim", ["overworld", "nether", "the_end"])
     rc.mandatory("loadAction", ParamType.Enum, "load");
     rc.mandatory("structToLoad", ParamType.String);
     rc.optional("originPos", ParamType.BlockPos);
-    rc.overload(["loadAction", "structToLoad", "originPos"]);
+    rc.optional("Dim", ParamType.Enum, "dim")
+    rc.overload(["loadAction", "structToLoad", "originPos", "Dim"]);
 
     // 卸载原理图
     rc.setEnum("unload", ["unload"]);
@@ -66,11 +69,13 @@ export class Command {
 
             const player = origin.player;
 
-            const originPos = result[2] ??
-              new IntPos(Math.floor(player.feetPos.x),
-                Math.floor(player.feetPos.y),
-                Math.floor(player.feetPos.z),
-                player.feetPos.dimid);
+            let originPos = null;
+
+            if (result[2] && result[3])
+              originPos = new IntPos(result[2].x, result[2].y, result[2].z, HelperUtils.dims.indexOf(result[3]));
+            else if (player)
+              originPos = new IntPos(Math.floor(player.feetPos.x), Math.floor(player.feetPos.y), Math.floor(player.feetPos.z), player.feetPos.dimid);
+            else output.error('非玩家必须输入坐标')
           
             let structName = result[1];
             let count = 1;
@@ -83,19 +88,22 @@ export class Command {
               Event.trigger(Events.MANAGER_ADD_STRUCTURE, `./plugins/ResinClumps/structure/${result[1]}.mcstructure`, originPos, structName);
               Event.trigger(Events.MANAGER_UPDATE_DATA);
               // Event.trigger(Events.RENDER_UPDATE_DATA);
-              Event.trigger(Events.WAND_ADD_PLAYER, player);
-              Event.trigger(Events.WAND_CHANGE_MODE, player, WandMode.Placing);
-              Event.trigger(Events.WAND_CHANGE_CONTROLING_STRUCT, player, structName);
-              Event.trigger(Events.WAND_UPDATE_DATA, player);
+              if (player) {
+                Event.trigger(Events.WAND_ADD_PLAYER, player);
+                Event.trigger(Events.WAND_CHANGE_MODE, player, WandMode.Placing);
+                Event.trigger(Events.WAND_CHANGE_CONTROLING_STRUCT, player, structName);
+                Event.trigger(Events.WAND_UPDATE_DATA, player);
+              }
               Event.trigger(Events.RENDER_REFRESH_GRIDS, structName);
             } catch (e) {
-              player.sendText(`§c加载原理图 §l${result[1]} §r§c失败`, 5);
+              if (player)
+                player.sendText(`§c加载原理图 §l${result[1]} §r§c失败`, 5);
               logger.error(`Failed to load structure ${result[1]}: ${e.message}`);
               return;
             }
             let text = `原理图 §l${result[1]} §r已加载`;
             if (count > 1) text += ` 为 §l${structName}§r`;
-            player.sendText(text, 5);
+            if (player) player.sendText(text, 5);
             break;
           }
           // 卸载原理图

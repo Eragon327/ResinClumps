@@ -24,18 +24,22 @@ class Manager {
   }
 
   #addStructure(filePath, originPos, structName = null) {
-    if(!File.exists(filePath)) throw new Error(`Structure file ${filePath} does not exist`);
-    const struct = Structure.load(filePath);
-    if (!struct) throw new Error(`Failed to load structure from ${filePath}`);
+    try {
+      if (!File.exists(filePath)) throw new Error(`Structure file ${filePath} does not exist`);
+      const struct = Structure.load(filePath);
+      if (!struct) throw new Error(`Failed to load structure from ${filePath}`);
    
-    const name = structName ?? filePath.substring(filePath.lastIndexOf('/') + 1).replace('.mcstructure', '');
+      const name = structName ?? filePath.substring(filePath.lastIndexOf('/') + 1).replace('.mcstructure', '');
 
-    if(this.cache.has(name)) {
-      throw new Error(`Structure name ${structName} already exists in cache`);
+      if (this.cache.has(name)) {
+        throw new Error(`Structure name ${name} already exists in cache`);
+      }
+
+      this.cache.set(name, { filePath, struct, originPos, posLocked: false });
+      //this.#updateCacheToFile(); 手动更新
+    } catch (e) {
+      logger.error(e.message);
     }
-
-    this.cache.set(name, { filePath, struct, originPos, posLocked: false });
-    //this.#updateCacheToFile(); 手动更新
   }
 
   #removeStructure(structName) {
@@ -105,11 +109,9 @@ class Manager {
           const by = originPos.y + y;
           const bz = originPos.z + z;
           const dimid = originPos.dimid;
-          const { blockData, isWaterLogged } = this.getBlockData(structName, index);
-          try {
-            // 不能放含水方块, 因为无法判断是含水源还是含水流
-            // if (isWaterLogged) { }
+          const blockData = this.getBlockData(structName, index);
 
+          try {
             const block = mc.getBlock(bx, by, bz, dimid);
             if (!block || block.type !== blockData.name) {
               if (placeCount >= maxPasteSpeed) {
@@ -117,42 +119,29 @@ class Manager {
                 placeCount = 0;
               }
 
-              switch (blockData.name) {
-                case "minecraft:air":
-                case "minecraft:flowing_water":
-                case "minecraft:flowing_lava": break;
-                case "minecraft:bubble_column":
-                  await Manager.#placeOneBlock(bx, by, bz, dimid, "minecraft:water", "minecraft:water"); //  实际上, 传字符串也能跑
-                  placeCount++;
-                  break;
-                case "minecraft:wooden_door":
-                case "minecraft:spruce_door":
-                case "minecraft:birch_door":
-                case "minecraft:jungle_door":
-                case "minecraft:acacia_door":
-                case "minecraft:dark_oak_door":
-                case "minecraft:mangrove_door":
-                case "minecraft:cherry_door":
-                case "minecraft:pale_oak_door":
-                case "minecraft:bamboo_door":
-                case "minecraft:crimson_door":
-                case "minecraft:warped_door":
-                case "minecraft:iron_door":
-                case "minecraft:copper_door":
-                case "minecraft:exposed_copper_door":
-                case "minecraft:weathered_copper_door":
-                case "minecraft:oxidized_copper_door":
-                case "minecraft:waxed_copper_door":
-                case "minecraft:waxed_exposed_copper_door":
-                case "minecraft:waxed_weathered_copper_door":
-                case "minecraft:waxed_oxidized_copper_door":
-                  // 门怎么放置都会出错
-                  break;
-                default:
-                  await Manager.#placeOneBlock(bx, by, bz, dimid, Nbt.ObjectToNbt(blockData), blockData.name);
-                  placeCount++;
-                  break;
+              if (["minecraft:air",
+                "minecraft:flowing_water",
+                "minecraft:flowing_lava"]
+                .includes(blockData.name)) {
+                placeCount++;
+                continue; // 跳过空气和流体方块的放置
               }
+
+              if (blockData.name === "minecraft:bubble_column") {
+                await Manager.#placeOneBlock(bx, by, bz, dimid, "minecraft:water", "minecraft:water"); //  实际上, 传字符串也能跑
+                placeCount++;
+                index++;
+                continue;
+              }
+
+              if (blockData.name.endsWith('_door')) {
+                // 门怎么放置都会出错
+                index++;
+                continue;
+              }
+
+              await Manager.#placeOneBlock(bx, by, bz, dimid, blockData.nbt, blockData.name);
+              placeCount++;
             }
           } catch (e) { logger.error(`Error placing block at (${bx}, ${by}, ${bz}): ${e.message}`); }
           index++;
@@ -190,7 +179,7 @@ class Manager {
     let result = 0;
     const endIndex = size.x * size.y * size.z;
     for (let index = 0; index < endIndex; index++) {
-      const { blockData } = this.getBlockData(structName, index);
+      const blockData = this.getBlockData(structName, index);
       if (blockData.name !== "minecraft:air" && 
         !blockData.name.includes('flowing_')) result++;
     }
@@ -213,7 +202,7 @@ class Manager {
     if (!this.hasStructure(structName)) return null;
     let i;
     if (typeof index === 'number') {
-      if (index < 0 || index >= this.cache.get(structName).struct.structure.block_indices[0].length) {
+      if (index < 0 || index >= this.cache.get(structName).struct.block_indices.length) {
         throw new Error('Index out of bounds');
       }
       i = index;
@@ -228,12 +217,10 @@ class Manager {
     }
 
     const struct = this.cache.get(structName).struct;
-    const blockIndex = struct.structure.block_indices[0][i];
-    const blockPalette = struct.structure.palette.default.block_palette;
-    const isWaterLogged = struct.structure.block_indices[1][i] !== -1;
-    const blockData = blockPalette[blockIndex];
+    const blockIndex = struct.block_indices[i];
+    const blockPalette = struct.block_palette;
 
-    return { blockData, isWaterLogged };
+    return blockPalette[blockIndex];
   }
 
   getSize(structName) {
@@ -268,8 +255,8 @@ export function ManagerInit() {
     try {
       if (File.exists(item.filePath)) {
         Event.trigger(Events.MANAGER_ADD_STRUCTURE, item.filePath,
-          new IntPos(item.originPos.x, item.originPos.y, item.originPos.z, item.originPos.dimid,
-            structName));
+          new IntPos(item.originPos.x, item.originPos.y, item.originPos.z, item.originPos.dimid),
+          structName);
         Event.trigger(Events.RENDER_SET_RENDER_MODE, structName, item.mode ?? RenderMode.All);
         Event.trigger(Events.RENDER_SET_LAYER_INDEX, structName, item.layerIndex ?? 0);
       } else {

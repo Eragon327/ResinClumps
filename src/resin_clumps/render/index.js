@@ -1,6 +1,7 @@
 import { Event, Events } from "../core/event.js";
 import { manager } from "../core/manager.js";
 import { HelperUtils } from "../utils/helpers.js";
+import { Nbt } from "../utils/nbt.js";
 
 const configFile = new JsonConfigFile("./plugins/ResinClumps/config/config.json");
 const displayRadius = configFile.get("displayRadius", 70);
@@ -9,7 +10,7 @@ const blacklist = configFile.get('BlackList', []);
 const scanSpeed = configFile.get("scanSpeed", 3000);
 const renderSpeed = configFile.get("renderSpeed", 3000);
 const displayInterval = configFile.get("displayInterval", 50);
-const retryInterval = configFile.get("retryInterval", 5000);
+const retryInterval = configFile.get("retryInterval", 15000);
 const maxGreedySize = configFile.get("maxGreedySize", 12);
 configFile.close();
 
@@ -188,7 +189,7 @@ class RenderMgr {
              if (mode === RenderMode.BelowLayer && ly > layerIndex) return;
              if (mode === RenderMode.AboveLayer && ly < layerIndex) return;
 
-             const { blockData } = manager.getBlockData(structName, { x: lx, y: ly, z: lz });
+             const blockData = manager.getBlockData(structName, { x: lx, y: ly, z: lz });
              const blockPos = new IntPos(origin.x + lx, origin.y + ly, origin.z + lz, origin.dimid);
              
              RenderTool.renderBlock(blockPos, lx, ly, lz, blockData, renderData.grids);
@@ -247,11 +248,13 @@ class RenderMgr {
 
             this.commitParticles(renderData);
 
-            if (renderData.mode === RenderMode.All) {
+            if (renderData.mode === RenderMode.All && !hasUnloadedChunks) {
                 logger.info(`原理图: ${structName} 全量更新完成! 粒子数: ${this.getParticleCount(structName)}`);
                 // mc.broadcast(`[ResinClumps] 原理图 §l${structName} §r全量更新完成! 粒子数: §l${this.getParticleCount(structName)}`);
             }
 
+        } catch (e) {
+            logger.error(`扫描原理图 ${structName} 时发生错误: ${e.message}`);
         } finally {
             renderData.scanning = false;
             // Retry if incomplete
@@ -352,7 +355,7 @@ class RenderMgr {
             for (let x = 0; x < size.x; x++) {
                 for (let z = 0; z < size.z; z++) {
                      await RenderTool.checkYield();
-                     const { blockData } = manager.getBlockData(structName, { x, y, z });
+                     const blockData = manager.getBlockData(structName, { x, y, z });
                      if (blacklist.includes(blockData.name)) continue;
                      
                      const name = blockData.name;
@@ -399,7 +402,7 @@ class RenderTool {
 
     static async renderAllBlocks(structName, grids) {
         if (!manager.hasStructure(structName)) return true;
-        RenderTool.startTime = Date.now();
+        // RenderTool.startTime = Date.now();
         const size = manager.getSize(structName);
         let success = true;
         for (let y = 0; y < size.y; y++) {
@@ -416,13 +419,13 @@ class RenderTool {
         const originPos = manager.getOriginPos(structName);
         const start = sy * size.x * size.z;
         let success = true;
-        
+    
         // To avoid excessive helper calls, iterating directly
         for (let sx = 0; sx < size.x; sx++) {
              for (let sz = 0; sz < size.z; sz++) {
                  await RenderTool.checkYield();
                  const i = start + sx * size.z + sz;
-                 const { blockData } = manager.getBlockData(structName, i);
+                 const blockData = manager.getBlockData(structName, i);
                  const pos = new IntPos(originPos.x + sx, originPos.y + sy, originPos.z + sz, originPos.dimid);
                  if (!RenderTool.renderBlock(pos, sx, sy, sz, blockData, grids)) success = false;
              }
@@ -433,14 +436,14 @@ class RenderTool {
     static async renderLayerBlocks(structName, layerIndex, grids) {
         const size = manager.getSize(structName);
         if (layerIndex >= 0 && layerIndex < size.y) {
-            RenderTool.startTime = Date.now();
+            // RenderTool.startTime = Date.now();
             return await RenderTool.renderPlane(structName, layerIndex, grids);
         }
         return true;
     }
 
     static async renderBelowLayerBlocks(structName, layerIndex, grids) {
-        RenderTool.startTime = Date.now();
+        // RenderTool.startTime = Date.now();
         let success = true;
         for (let y = 0; y <= layerIndex; y++) {
              if (Render.interrupt) return success;
@@ -451,7 +454,7 @@ class RenderTool {
 
     static async renderAboveLayerBlocks(structName, layerIndex, grids) {
         const size = manager.getSize(structName);
-        RenderTool.startTime = Date.now();
+        // RenderTool.startTime = Date.now();
         let success = true;
         for (let y = layerIndex; y < size.y; y++) {
             if (Render.interrupt) return success;
@@ -470,7 +473,7 @@ class RenderTool {
         if (block.type === 'minecraft:air' && expectedName !== 'minecraft:air') errorState = BlockState.Lost;
         else if (expectedName === 'minecraft:air' && block.type !== 'minecraft:air') errorState = BlockState.Extra;
         else if (block.type !== expectedName) errorState = BlockState.WrongType;
-        else if (!HelperUtils.ObjectEquals(block.getBlockState(), HelperUtils.trueToOne(expected.states))) errorState = BlockState.WrongState;
+        else if (expected.nbt && !Nbt.NbtEquals(block.getNbt(), expected.nbt)) errorState = BlockState.WrongState;
 
         for (const [state, grid] of Object.entries(grids)) {
             if (state === errorState) grid.setTrue(x, y, z);

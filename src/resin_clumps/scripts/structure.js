@@ -1,3 +1,5 @@
+import { Nbt } from "../utils/nbt.js";
+
 export class Structure {
   static load(filePath) {
     if (!File.exists(filePath)) return null;
@@ -5,28 +7,37 @@ export class Structure {
     const nbt = fi.readAllSync();
     fi.close();
     const comp = NBT.parseBinaryNBT(nbt);
-    const struct = JSON.parse(comp.toString()); // 旧版本 LSE 的 toObject() 有 Bug
-    // const struct = comp.toObject();          // 新版本 LSE 的 toObject() 已修复该 Bug
+    const obj = Nbt.NbtToObject(comp);
+
+    xyz_to_yxz(obj);
+    
+    keepPaletteNbt(obj, comp);
+
+    // 关键修复: 将根 NBT 对象挂载到 struct 上，防止其被 GC 回收导致子 tag 失效
+    // struct.__root_nbt__ = comp;
+
+    // pickleRemoveWater(obj);
+
+    if (!obj?.structure) throw new Error(`Fail to load ${filePath}`);
 
     // 内存优化: 移除无关数据
-    if (struct.structure) {
-        delete struct.structure.entities; 
-        const palette = struct.structure.palette?.default;
-        if (palette) {
-             delete palette.block_position_data; 
-             if (palette.block_palette) {
-                 for (let i = 0; i < palette.block_palette.length; i++) {
-                     const p = palette.block_palette[i];
-                     // 只保留 name 和 states, 丢弃 version
-                     palette.block_palette[i] = { name: p.name, states: p.states || {} };
-                 }
-             }
+    const palette = obj.structure.palette?.default.block_palette;
+    if (palette) {
+      if (palette) {
+        for (let i = 0; i < palette.length; i++) {
+          const p = palette[i];
+          // 只保留 nbt 数据
+          palette[i] = { name: p.name, nbt: p.nbt };
         }
+      }
     }
 
-    xyz_to_yxz(struct);
-    // keepPaletteNbt(struct, comp); // 已弃用该功能
-    pickleRemoveWater(struct);
+    const struct = {
+      size: obj.size,
+      block_indices: obj.structure.block_indices[0],
+      block_palette: palette
+    };
+
     return struct;
   }
 
@@ -59,7 +70,7 @@ function xyz_to_yxz(struct) {
   struct.structure.block_indices[1] = new_isWaterLogged;
 }
 
-// 保留方块调色板中的 NBT 数据, 此功能可能过于超模, 已弃用
+// 保留方块调色板中的 NBT 数据, 此功能可能过于超模
 function keepPaletteNbt(struct, structNbt) {
   let index = 0;
   for (const obj of struct.structure.palette.default.block_palette) {
@@ -68,12 +79,17 @@ function keepPaletteNbt(struct, structNbt) {
       .getTag('default')
       .getTag('block_palette')
       .getTag(index);
-    obj.nbt = origNbt;
+    
+    // Copilot 推荐的深拷贝方式: 通过 SNBT 转换序列化
+    // 这能确保切断所有引用，且能正确处理多层嵌套的 NBT
+    obj.nbt = NBT.parseSNBT(origNbt.toSNBT());
+    // logger.info(`Keeping NBT for palette index ${index}: ${obj.nbt.toSNBT()}`);
     index++;
   }
 }
 
 // 直接为所有海泡菜去水
+/*
 function pickleRemoveWater(struct) {
   for (const obj of struct.structure.palette.default.block_palette) {
     if (obj.name === "minecraft:sea_pickle") {
@@ -82,4 +98,4 @@ function pickleRemoveWater(struct) {
       }
     }
   }
-}
+}*/

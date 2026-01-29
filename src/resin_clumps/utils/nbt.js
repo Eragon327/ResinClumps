@@ -52,4 +52,20 @@ export class Nbt {  // 全静态类
     });
     return new NbtList(nbtArr);
   }
+
+  static NbtToObject(nbtCompound) {
+    return JSON.parse(nbtCompound.toString()); // 旧版本 LSE 的 toObject() 有 Bug
+    // return nbtCompound.toObject();          // 新版本 LSE 的 toObject() 已修复该 Bug
+  }
+
+  static NbtEquals(nbt1, nbt2) {
+    // logger.info(nbt2.toSNBT());
+    if (nbt1 === nbt2) return true;
+    if (!nbt1 || !nbt2) return false;
+    try {
+      return nbt1.toString() === nbt2.toString();
+    } catch (e) {
+      return false;
+    }
+  }
 }

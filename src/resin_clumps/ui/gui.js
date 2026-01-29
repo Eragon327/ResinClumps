@@ -128,7 +128,7 @@ class GUI {
     const form = mc.newSimpleForm();
     form.setTitle(`原理图 ${structName} 设置`);
     const originPos = manager.getOriginPos(structName);
-    form.setContent(`请选择操作: \n原理图位置: ${HelperUtils.dims[originPos.dimid]} (${originPos.x}, ${originPos.y}, ${originPos.z})`);
+    form.setContent(`请选择操作: \n原理图位置: ${HelperUtils.dims_zh[originPos.dimid]} (${originPos.x}, ${originPos.y}, ${originPos.z})`);
     let buttons = ["渲染设置"];
     form.addButton("渲染设置");
     const mode = Render.getMode(structName);

@@ -43,51 +43,12 @@ export class HelperUtils {  // 全静态类
     }
     return result;
   }
-
-  static ObjectEquals(obj1, obj2) {
-    for (const key in obj1) {
-      if (typeof obj1[key] !== typeof obj2[key]) return false;
-      if (typeof obj1[key] === 'object') {
-        if (Array.isArray(obj1[key]) !== Array.isArray(obj2[key])) return false;
-        if (Array.isArray(obj1[key])) {
-          if (obj1[key].length !== obj2[key].length) return false;
-          for (let i = 0; i < obj1[key].length; i++) {
-            if (typeof obj1[key][i] !== typeof obj2[key][i]) return false;
-            if (typeof obj1[key][i] === 'object') {
-              return HelperUtils.ObjectEquals(obj1[key][i], obj2[key][i]);
-            } else {
-              if (obj1[key][i] !== obj2[key][i]) return false;
-            }
-          }
-        } else {
-          return HelperUtils.ObjectEquals(obj1[key], obj2[key]);
-        }
-      } else {
-        if (obj1[key] !== obj2[key]) return false;
-      }
-    }
-    return true;
-  }
-
-  static trueToOne(obj) {
-    obj = JSON.parse(JSON.stringify(obj)); // 深拷贝
-
-    for (const key in obj) {
-      if (obj[key] === true) {
-        obj[key] = 1;
-      } else if (obj[key] === false) {
-        obj[key] = 0;
-      }
-    }
-
-    return obj;
-  }
-
+  
   static countOnes(n) {
     return n.toString(2).split('1').length - 1;
   }
 
-  static #en_ = [
+  static #en = [
     "one",
     "two",
     "three",
@@ -96,12 +57,13 @@ export class HelperUtils {  // 全静态类
   static enToNumber(numStr) {
     if (typeof numStr !== 'string') return NaN;
     const en = numStr.split('_')[0];
-    const index = HelperUtils.#en_.indexOf(en);
+    const index = HelperUtils.#en.indexOf(en);
     if (index === -1) return NaN;
     return index + 1;
   }
 
-  static dims = ['主世界', '下界', '末地'];
+  static dims_zh = ['主世界', '下界', '末地'];
+  static dims = ['overworld', 'nether', 'the_end'];
 
   static trBlocks(results, content, currentCount, allCount) {// 全物品 ≈0.01s
     if (!File.exists("./plugins/ResinClumps/src/lang/zh_CN.json")) {//使用blockName

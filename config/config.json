@@ -4,7 +4,7 @@
     "displayRadius": 70,
     "maxGreedySize": 12,
     "displayInterval": 50,
-    "retryInterval": 5000,
+    "retryInterval": 15000,
     "placeDistance": 5,
     "placeInterval": 1,
     "particleLifetime": 1550,
@@ -79,5 +79,5 @@
         "minecraft:black_bed"
     ],
     "rankAdaption": false,
-    "EasyPlaceMode": 1
+    "EasyPlaceMode": 0
 }

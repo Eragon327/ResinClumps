@@ -1,4 +1,5 @@
 import "../core/event.js";
+
 import { ManagerInit } from "../core/manager.js";
 import { RenderInit } from "../render/index.js";
 import { WandInit } from "../core/wand.js";
